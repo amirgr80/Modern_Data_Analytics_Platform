@@ -1,0 +1,387 @@
+x-airflow-common: &airflow-common
+  build:
+    context: ./workflow
+    dockerfile: Dockerfile
+    args:
+      AIRFLOW_VERSION: ${AIRFLOW_VERSION:-3.2.1}
+      AIRFLOW_PYTHON_VERSION: ${AIRFLOW_PYTHON_VERSION:-3.12}
+  image: bootcamp-airflow:${AIRFLOW_VERSION:-3.2.1}
+  environment: &airflow-common-env
+    TZ: ${TZ:-Asia/Tehran}
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: admin:admin
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "True"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow}@postgres/${POSTGRES_DB:-airflow}
+    AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow}@postgres/${POSTGRES_DB:-airflow}
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-apiserver:8080/execution/"
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
+    AIRFLOW__API__BASE_URL: "http://localhost:${AIRFLOW_APISERVER_PORT:-8080}"
+    MINIO_ENDPOINT: "http://minio:9000"
+    MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+    MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+    ICEBERG_REST_URI: "http://iceberg-rest:8181"
+    ICEBERG_WAREHOUSE: ${ICEBERG_WAREHOUSE}
+    CLICKHOUSE_HOST: clickhouse
+    CLICKHOUSE_HTTP_PORT: 8123
+    CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+    CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+    CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS}
+    SPARK_MASTER_URL: "spark://spark-master:7077"
+
+  user: "${AIRFLOW_UID:-50000}:0"
+  volumes:
+    - ./workflow/dags:/opt/airflow/dags
+    - ./workflow/tasks:/opt/airflow/tasks
+    - ./workflow/utils:/opt/airflow/utils
+    - ./workflow/plugins:/opt/airflow/plugins
+    - airflow_logs:/opt/airflow/logs
+    - ./src:/opt/airflow/src
+    - ./configs/airflow:/opt/airflow/config
+  depends_on: &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks:
+    - datalake
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-airflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
+      POSTGRES_DB: ${POSTGRES_DB:-airflow}
+      TZ: ${TZ:-Asia/Tehran}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-airflow} -d ${POSTGRES_DB:-airflow}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - datalake
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - datalake
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -e
+        airflow db migrate
+        airflow users create \
+          --username "${AIRFLOW_ADMIN_USER:-admin}" \
+          --password "${AIRFLOW_ADMIN_PASSWORD:-admin}" \
+          --firstname "${AIRFLOW_ADMIN_FIRSTNAME:-Admin}" \
+          --lastname "${AIRFLOW_ADMIN_LASTNAME:-User}" \
+          --role Admin \
+          --email "${AIRFLOW_ADMIN_EMAIL:-admin@example.com}" || true
+    restart: "no"
+  airflow-apiserver:
+    <<: *airflow-common
+    container_name: airflow-apiserver
+    command: api-server
+    ports:
+      - "${AIRFLOW_APISERVER_PORT:-8080}:8080"
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+  airflow-worker:
+    <<: *airflow-common
+    container_name: airflow-worker
+    command: celery worker
+    environment:
+      <<: *airflow-common-env
+      DUMB_INIT_SETSID: "0"
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-apiserver:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d celery@$$HOSTNAME",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+  airflow-triggerer:
+    <<: *airflow-common
+    container_name: airflow-triggerer
+    command: triggerer
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "airflow jobs check --job-type TriggererJob --hostname $$HOSTNAME",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+  spark-master:
+    <<: *airflow-common
+    image: apache/spark:3.5.3
+    container_name: spark-master
+    user: root
+    entrypoint:
+      ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
+    environment:
+      SPARK_NO_DAEMONIZE: "true"
+    ports:
+      - "${SPARK_MASTER_UI_PORT:-8081}:8080"
+      - "${SPARK_MASTER_PORT:-7077}:7077"
+    volumes:
+      - ./src:/opt/spark-apps
+      - ./configs/spark:/opt/spark/conf
+      - spark_data:/opt/spark/work
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080 > /dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - datalake
+
+  spark-worker:
+    image: apache/spark:3.5.3
+    container_name: spark-worker
+    user: root
+    entrypoint:
+      [
+        "/opt/spark/bin/spark-class",
+        "org.apache.spark.deploy.worker.Worker",
+        "spark://spark-master:7077",
+      ]
+    environment:
+      SPARK_NO_DAEMONIZE: "true"
+      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-2}
+      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-2G}
+    ports:
+      - "${SPARK_WORKER_UI_PORT:-8082}:8081"
+    volumes:
+      - ./src:/opt/spark-apps
+      - ./configs/spark:/opt/spark/conf
+      - spark_data:/opt/spark/work
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - datalake
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - datalake
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    entrypoint: ["/bin/sh", "/init-buckets.sh"]
+    volumes:
+      - ./configs/minio/init-buckets.sh:/init-buckets.sh:ro
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - datalake
+
+  # ============================================================================
+  iceberg-rest:
+    image: tabulario/iceberg-rest:latest
+    container_name: iceberg-rest
+    environment:
+      CATALOG_WAREHOUSE: ${ICEBERG_WAREHOUSE}
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_REGION: us-east-1
+    ports:
+      - "${ICEBERG_REST_PORT:-8181}:8181"
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        ["CMD-SHELL", "curl -sf http://localhost:8181/v1/config > /dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - datalake
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: clickhouse
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      TZ: ${TZ:-Asia/Tehran}
+    ports:
+      - "${CLICKHOUSE_HTTP_PORT:-8123}:8123"
+      - "${CLICKHOUSE_NATIVE_PORT:-9004}:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./sql/clickhouse:/docker-entrypoint-initdb.d:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - datalake
+
+  postgres-metabase:
+    image: postgres:16-alpine
+    container_name: postgres-metabase
+    environment:
+      POSTGRES_USER: ${METABASE_DB_USER}
+      POSTGRES_PASSWORD: ${METABASE_DB_PASSWORD}
+      POSTGRES_DB: ${METABASE_DB}
+    volumes:
+      - postgres_metabase_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${METABASE_DB_USER} -d ${METABASE_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - datalake
+
+  metabase:
+    image: metabase/metabase:latest
+    container_name: metabase
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: ${METABASE_DB}
+      MB_DB_PORT: 5432
+      MB_DB_USER: ${METABASE_DB_USER}
+      MB_DB_PASS: ${METABASE_DB_PASSWORD}
+      MB_DB_HOST: postgres-metabase
+    ports:
+      - "${METABASE_PORT:-3000}:3000"
+    volumes:
+      - metabase_data:/metabase-data
+    depends_on:
+      postgres-metabase:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test:
+        ["CMD-SHELL", "curl -sf http://localhost:3000/api/health > /dev/null"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - datalake
+
+networks:
+  datalake:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  postgres_metabase_data:
+  minio_data:
+  clickhouse_data:
+  metabase_data:
+  spark_data:
+  airflow_logs:

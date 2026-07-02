@@ -1,0 +1,22 @@
+# ==============================================================================
+# workflow/requirements.txt
+# هر پکیج پایتونی که DAG ها یا اسکریپت‌های شما لازم دارن رو اینجا اضافه کنید.
+# این فایل موقع build شدن ایمیج (workflow/Dockerfile) نصب میشه.
+# ==============================================================================
+
+# --- Providers رسمی ایرفلو ---
+apache-airflow-providers-celery
+apache-airflow-providers-postgres
+apache-airflow-providers-amazon        # اتصال به MinIO (سازگار با S3)
+apache-airflow-providers-apache-spark  # اجرای Spark job ها از داخل DAG
+apache-airflow-providers-common-sql
+
+# --- اتصال به کافکای خارجی ---
+confluent-kafka
+
+# --- اتصال به ClickHouse ---
+clickhouse-connect
+
+# --- کتابخانه‌های عمومی برای کار با داده ---
+pandas
+pyarrow
