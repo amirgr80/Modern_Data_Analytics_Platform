@@ -71,24 +71,21 @@ x-traefik-labels-airflow: &traefik-labels-airflow
   traefik.enable: "true"
   traefik.docker.network: traefik_traefik_network
   traefik.http.routers.airflow.rule: Host(`airflow.group1.querabootcamp-de.ir`)
-  traefik.http.routers.airflow.entrypoints: websecure
-  traefik.http.routers.airflow.tls: "true"
+  traefik.http.routers.airflow.entrypoints: web
   traefik.http.services.airflow.loadbalancer.server.port: "8080"
 
 x-traefik-labels-minio: &traefik-labels-minio
   traefik.enable: "true"
   traefik.docker.network: traefik_traefik_network
   traefik.http.routers.minio.rule: Host(`storage.group1.querabootcamp-de.ir`)
-  traefik.http.routers.minio.entrypoints: websecure
-  traefik.http.routers.minio.tls: "true"
+  traefik.http.routers.minio.entrypoints: web
   traefik.http.services.minio.loadbalancer.server.port: "9001"
 
 x-traefik-labels-metabase: &traefik-labels-metabase
   traefik.enable: "true"
   traefik.docker.network: traefik_traefik_network
   traefik.http.routers.metabase.rule: Host(`mb.group1.querabootcamp-de.ir`)
-  traefik.http.routers.metabase.entrypoints: websecure
-  traefik.http.routers.metabase.tls: "true"
+  traefik.http.routers.metabase.entrypoints: web
   traefik.http.services.metabase.loadbalancer.server.port: "3000"
 
 # شبکه Traefik سرور group1: traefik_traefik_network (docker network ls)
@@ -136,13 +133,6 @@ services:
       - |
         set -e
         airflow db migrate
-        airflow users create \
-          --username "${AIRFLOW_ADMIN_USER}" \
-          --password "${AIRFLOW_ADMIN_PASSWORD}" \
-          --firstname Admin \
-          --lastname User \
-          --role Admin \
-          --email admin@example.com || true
     restart: "no"
 
   airflow-apiserver:
