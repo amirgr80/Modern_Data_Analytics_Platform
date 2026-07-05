@@ -88,8 +88,6 @@ x-traefik-labels-metabase: &traefik-labels-metabase
   traefik.http.routers.metabase.entrypoints: web
   traefik.http.services.metabase.loadbalancer.server.port: "3000"
 
-# شبکه Traefik سرور group1: traefik_traefik_network (docker network ls)
-
 services:
   postgres:
     image: docker.arvancloud.ir/postgres:16-alpine
