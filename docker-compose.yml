@@ -8,7 +8,7 @@ x-pipeline-env: &pipeline-env
   SPARK_MASTER_URL: "spark://spark-master:7077"
 
 x-airflow-common: &airflow-common
-  image: apache/airflow:3.2.1-python3.12
+  image: docker.arvancloud.ir/apache/airflow:3.2.1-python3.12
   environment: &airflow-common-env
     TZ: Asia/Tehran
     _PIP_ADDITIONAL_REQUIREMENTS: >-
@@ -95,7 +95,7 @@ x-traefik-labels-metabase: &traefik-labels-metabase
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: docker.arvancloud.ir/postgres:16-alpine
     container_name: postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -115,7 +115,7 @@ services:
       - datalake
 
   redis:
-    image: redis:7-alpine
+    image: docker.arvancloud.ir/redis:7-alpine
     container_name: redis
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -225,7 +225,7 @@ services:
       start_period: 40s
 
   spark-master:
-    image: apache/spark:3.5.3
+    image: docker.arvancloud.ir/apache/spark:3.5.3
     container_name: spark-master
     user: root
     entrypoint:
@@ -251,7 +251,7 @@ services:
       - datalake
 
   spark-worker:
-    image: apache/spark:3.5.3
+    image: docker.arvancloud.ir/apache/spark:3.5.3
     container_name: spark-worker
     user: root
     entrypoint:
@@ -279,7 +279,7 @@ services:
       - datalake
 
   minio:
-    image: minio/minio:RELEASE.2024-12-18T13-15-42Z
+    image: docker.arvancloud.ir/minio/minio:RELEASE.2024-12-18T13-15-44Z
     container_name: minio
     command: server /data --console-address ":9001"
     environment:
@@ -303,7 +303,7 @@ services:
       - traefik
 
   iceberg-rest:
-    image: tabulario/iceberg-rest:1.6.0
+    image: docker.arvancloud.ir/tabulario/iceberg-rest:1.6.0
     container_name: iceberg-rest
     environment:
       CATALOG_WAREHOUSE: "s3://warehouse"
@@ -330,7 +330,7 @@ services:
       - datalake
 
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8
+    image: docker.arvancloud.ir/clickhouse/clickhouse-server:24.8
     container_name: clickhouse
     environment:
       CLICKHOUSE_DB: lakehouse
@@ -358,7 +358,7 @@ services:
       - datalake
 
   postgres-metabase:
-    image: postgres:16-alpine
+    image: docker.arvancloud.ir/postgres:16-alpine
     container_name: postgres-metabase
     environment:
       POSTGRES_USER: ${METABASE_DB_USER}
@@ -377,7 +377,7 @@ services:
       - datalake
 
   metabase:
-    image: metabase/metabase:v0.51.4
+    image: docker.arvancloud.ir/metabase/metabase:v0.51.4
     container_name: metabase
     environment:
       MB_DB_TYPE: postgres
