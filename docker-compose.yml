@@ -1,39 +1,52 @@
+x-pipeline-env: &pipeline-env
+  MINIO_ENDPOINT: "http://minio:9000"
+  MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+  MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+  KAFKA_BOOTSTRAP_SERVERS: "185.255.90.14:9092"
+  ICEBERG_REST_URI: "http://iceberg-rest:8181"
+  ICEBERG_WAREHOUSE: "s3://warehouse"
+  SPARK_MASTER_URL: "spark://spark-master:7077"
+
 x-airflow-common: &airflow-common
-  build:
-    context: ./workflow
-    dockerfile: Dockerfile
-    args:
-      AIRFLOW_VERSION: ${AIRFLOW_VERSION:-3.2.1}
-      AIRFLOW_PYTHON_VERSION: ${AIRFLOW_PYTHON_VERSION:-3.12}
-  image: bootcamp-airflow:${AIRFLOW_VERSION:-3.2.1}
+  image: apache/airflow:3.2.1-python3.12
   environment: &airflow-common-env
-    TZ: ${TZ:-Asia/Tehran}
+    TZ: Asia/Tehran
+    _PIP_ADDITIONAL_REQUIREMENTS: >-
+      apache-airflow-providers-celery
+      apache-airflow-providers-postgres
+      apache-airflow-providers-amazon
+      apache-airflow-providers-apache-spark
+      apache-airflow-providers-common-sql
+      confluent-kafka
+      clickhouse-connect
+      pandas
+      pyarrow
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
     AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
     AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: admin:admin
     AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "True"
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow}@postgres/${POSTGRES_DB:-airflow}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/airflow
     AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
-    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER:-airflow}:${POSTGRES_PASSWORD:-airflow}@postgres/${POSTGRES_DB:-airflow}
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/airflow
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-apiserver:8080/execution/"
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
-    AIRFLOW__API__BASE_URL: "http://localhost:${AIRFLOW_APISERVER_PORT:-8080}"
+    AIRFLOW__API__BASE_URL: "https://airflow.group1.querabootcamp-de.ir"
     MINIO_ENDPOINT: "http://minio:9000"
     MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
     MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
     ICEBERG_REST_URI: "http://iceberg-rest:8181"
-    ICEBERG_WAREHOUSE: ${ICEBERG_WAREHOUSE}
+    ICEBERG_WAREHOUSE: "s3://warehouse"
     CLICKHOUSE_HOST: clickhouse
-    CLICKHOUSE_HTTP_PORT: 8123
-    CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+    CLICKHOUSE_HTTP_PORT: "8123"
+    CLICKHOUSE_DB: lakehouse
     CLICKHOUSE_USER: ${CLICKHOUSE_USER}
     CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
-    KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS}
+    KAFKA_BOOTSTRAP_SERVERS: "185.255.90.14:9092"
     SPARK_MASTER_URL: "spark://spark-master:7077"
 
-  user: "${AIRFLOW_UID:-50000}:0"
+  user: "50000:0"
   volumes:
     - ./workflow/dags:/opt/airflow/dags
     - ./workflow/tasks:/opt/airflow/tasks
@@ -51,23 +64,48 @@ x-airflow-common: &airflow-common
     - datalake
   restart: unless-stopped
 
+x-traefik: &traefik-net
+  - traefik
+
+x-traefik-labels-airflow: &traefik-labels-airflow
+  traefik.enable: "true"
+  traefik.docker.network: traefik_traefik_network
+  traefik.http.routers.airflow.rule: Host(`airflow.group1.querabootcamp-de.ir`)
+  traefik.http.routers.airflow.entrypoints: websecure
+  traefik.http.routers.airflow.tls: "true"
+  traefik.http.services.airflow.loadbalancer.server.port: "8080"
+
+x-traefik-labels-minio: &traefik-labels-minio
+  traefik.enable: "true"
+  traefik.docker.network: traefik_traefik_network
+  traefik.http.routers.minio.rule: Host(`storage.group1.querabootcamp-de.ir`)
+  traefik.http.routers.minio.entrypoints: websecure
+  traefik.http.routers.minio.tls: "true"
+  traefik.http.services.minio.loadbalancer.server.port: "9001"
+
+x-traefik-labels-metabase: &traefik-labels-metabase
+  traefik.enable: "true"
+  traefik.docker.network: traefik_traefik_network
+  traefik.http.routers.metabase.rule: Host(`mb.group1.querabootcamp-de.ir`)
+  traefik.http.routers.metabase.entrypoints: websecure
+  traefik.http.routers.metabase.tls: "true"
+  traefik.http.services.metabase.loadbalancer.server.port: "3000"
+
+# شبکه Traefik سرور group1: traefik_traefik_network (docker network ls)
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-airflow}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
-      POSTGRES_DB: ${POSTGRES_DB:-airflow}
-      TZ: ${TZ:-Asia/Tehran}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: airflow
+      TZ: Asia/Tehran
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-airflow} -d ${POSTGRES_DB:-airflow}",
-        ]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d airflow"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -99,19 +137,23 @@ services:
         set -e
         airflow db migrate
         airflow users create \
-          --username "${AIRFLOW_ADMIN_USER:-admin}" \
-          --password "${AIRFLOW_ADMIN_PASSWORD:-admin}" \
-          --firstname "${AIRFLOW_ADMIN_FIRSTNAME:-Admin}" \
-          --lastname "${AIRFLOW_ADMIN_LASTNAME:-User}" \
+          --username "${AIRFLOW_ADMIN_USER}" \
+          --password "${AIRFLOW_ADMIN_PASSWORD}" \
+          --firstname Admin \
+          --lastname User \
           --role Admin \
-          --email "${AIRFLOW_ADMIN_EMAIL:-admin@example.com}" || true
+          --email admin@example.com || true
     restart: "no"
+
   airflow-apiserver:
     <<: *airflow-common
     container_name: airflow-apiserver
     command: api-server
-    ports:
-      - "${AIRFLOW_APISERVER_PORT:-8080}:8080"
+    labels:
+      <<: *traefik-labels-airflow
+    networks:
+      - datalake
+      - traefik
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
@@ -123,6 +165,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 40s
+
   airflow-scheduler:
     <<: *airflow-common
     container_name: airflow-scheduler
@@ -137,6 +180,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 40s
+
   airflow-worker:
     <<: *airflow-common
     container_name: airflow-worker
@@ -160,6 +204,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 40s
+
   airflow-triggerer:
     <<: *airflow-common
     container_name: airflow-triggerer
@@ -178,18 +223,19 @@ services:
       timeout: 10s
       retries: 5
       start_period: 40s
+
   spark-master:
-    <<: *airflow-common
     image: apache/spark:3.5.3
     container_name: spark-master
     user: root
     entrypoint:
       ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
     environment:
+      <<: *pipeline-env
       SPARK_NO_DAEMONIZE: "true"
     ports:
-      - "${SPARK_MASTER_UI_PORT:-8081}:8080"
-      - "${SPARK_MASTER_PORT:-7077}:7077"
+      - "8081:8080"
+      - "7077:7077"
     volumes:
       - ./src:/opt/spark-apps
       - ./configs/spark:/opt/spark/conf
@@ -215,11 +261,12 @@ services:
         "spark://spark-master:7077",
       ]
     environment:
+      <<: *pipeline-env
       SPARK_NO_DAEMONIZE: "true"
-      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-2}
-      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-2G}
+      SPARK_WORKER_CORES: "2"
+      SPARK_WORKER_MEMORY: 2G
     ports:
-      - "${SPARK_WORKER_UI_PORT:-8082}:8081"
+      - "8082:8081"
     volumes:
       - ./src:/opt/spark-apps
       - ./configs/spark:/opt/spark/conf
@@ -230,16 +277,18 @@ services:
     restart: unless-stopped
     networks:
       - datalake
+
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2024-12-18T13-15-42Z
     container_name: minio
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    ports:
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      MINIO_BROWSER_REDIRECT_URL: https://storage.group1.querabootcamp-de.ir
+      MINIO_SERVER_URL: https://storage.group1.querabootcamp-de.ir
+    labels:
+      <<: *traefik-labels-minio
     volumes:
       - minio_data:/data
     healthcheck:
@@ -251,29 +300,13 @@ services:
     restart: unless-stopped
     networks:
       - datalake
+      - traefik
 
-  minio-init:
-    image: minio/mc:latest
-    container_name: minio-init
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-    entrypoint: ["/bin/sh", "/init-buckets.sh"]
-    volumes:
-      - ./configs/minio/init-buckets.sh:/init-buckets.sh:ro
-    depends_on:
-      minio:
-        condition: service_healthy
-    restart: "no"
-    networks:
-      - datalake
-
-  # ============================================================================
   iceberg-rest:
-    image: tabulario/iceberg-rest:latest
+    image: tabulario/iceberg-rest:1.6.0
     container_name: iceberg-rest
     environment:
-      CATALOG_WAREHOUSE: ${ICEBERG_WAREHOUSE}
+      CATALOG_WAREHOUSE: "s3://warehouse"
       CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
       CATALOG_S3_ENDPOINT: http://minio:9000
       CATALOG_S3_PATH__STYLE__ACCESS: "true"
@@ -281,10 +314,10 @@ services:
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
       AWS_REGION: us-east-1
     ports:
-      - "${ICEBERG_REST_PORT:-8181}:8181"
+      - "8181:8181"
     depends_on:
-      minio-init:
-        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
     healthcheck:
       test:
         ["CMD-SHELL", "curl -sf http://localhost:8181/v1/config > /dev/null"]
@@ -300,13 +333,13 @@ services:
     image: clickhouse/clickhouse-server:24.8
     container_name: clickhouse
     environment:
-      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      CLICKHOUSE_DB: lakehouse
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
-      TZ: ${TZ:-Asia/Tehran}
+      TZ: Asia/Tehran
     ports:
-      - "${CLICKHOUSE_HTTP_PORT:-8123}:8123"
-      - "${CLICKHOUSE_NATIVE_PORT:-9004}:9000"
+      - "8123:8123"
+      - "9004:9000"
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - ./sql/clickhouse:/docker-entrypoint-initdb.d:ro
@@ -330,11 +363,11 @@ services:
     environment:
       POSTGRES_USER: ${METABASE_DB_USER}
       POSTGRES_PASSWORD: ${METABASE_DB_PASSWORD}
-      POSTGRES_DB: ${METABASE_DB}
+      POSTGRES_DB: metabase
     volumes:
       - postgres_metabase_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${METABASE_DB_USER} -d ${METABASE_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${METABASE_DB_USER} -d metabase"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -344,17 +377,18 @@ services:
       - datalake
 
   metabase:
-    image: metabase/metabase:latest
+    image: metabase/metabase:v0.51.4
     container_name: metabase
     environment:
       MB_DB_TYPE: postgres
-      MB_DB_DBNAME: ${METABASE_DB}
+      MB_DB_DBNAME: metabase
       MB_DB_PORT: 5432
       MB_DB_USER: ${METABASE_DB_USER}
       MB_DB_PASS: ${METABASE_DB_PASSWORD}
       MB_DB_HOST: postgres-metabase
-    ports:
-      - "${METABASE_PORT:-3000}:3000"
+      MB_SITE_URL: https://mb.group1.querabootcamp-de.ir
+    labels:
+      <<: *traefik-labels-metabase
     volumes:
       - metabase_data:/metabase-data
     depends_on:
@@ -372,10 +406,14 @@ services:
     restart: unless-stopped
     networks:
       - datalake
+      - traefik
 
 networks:
   datalake:
     driver: bridge
+  traefik:
+    external: true
+    name: traefik_traefik_network
 
 volumes:
   postgres_data:
