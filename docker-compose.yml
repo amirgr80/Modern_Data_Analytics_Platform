@@ -127,6 +127,9 @@ services:
     <<: *airflow-common
     container_name: airflow-init
     entrypoint: /bin/bash
+    environment:
+      <<: *airflow-common-env
+      _PIP_ADDITIONAL_REQUIREMENTS: ""
     command:
       - -c
       - |
