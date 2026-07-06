@@ -123,15 +123,19 @@ services:
     networks:
       - datalake
 
-  airflow-init:
+airflow-init:
     <<: *airflow-common
     container_name: airflow-init
+    user: "0:0"
     entrypoint: /bin/bash
     command:
       - -c
       - |
         set -e
+        mkdir -p /opt/airflow/simple_auth
         echo "{\"${AIRFLOW_ADMIN_USER}\": \"${AIRFLOW_ADMIN_PASSWORD}\"}" > /opt/airflow/simple_auth/simple_auth_manager_passwords.json.generated
+        chown -R 50000:0 /opt/airflow/simple_auth
+        chmod -R 775 /opt/airflow/simple_auth
         airflow db migrate
     restart: "no"
 
