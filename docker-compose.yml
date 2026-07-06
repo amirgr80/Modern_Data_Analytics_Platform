@@ -123,7 +123,7 @@ services:
     networks:
       - datalake
 
-airflow-init:
+  airflow-init:
     <<: *airflow-common
     container_name: airflow-init
     user: "0:0"
