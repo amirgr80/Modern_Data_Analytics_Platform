@@ -285,7 +285,6 @@ services:
       MINIO_ROOT_USER_FILE: ""
       MINIO_ROOT_PASSWORD_FILE: ""
       MINIO_BROWSER_REDIRECT_URL: https://storage.group1.querabootcamp-de.ir
-      MINIO_SERVER_URL: https://storage.group1.querabootcamp-de.ir
     labels:
       <<: *traefik-labels-minio
     volumes:
