@@ -275,7 +275,7 @@ services:
     networks:
       - datalake
 
-minio:
+  minio:
     image: docker.arvancloud.ir/minio/minio:RELEASE.2024-12-18T13-15-44Z
     container_name: minio
     command: server /data --console-address ":9001"
