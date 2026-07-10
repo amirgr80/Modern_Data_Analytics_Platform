@@ -4,7 +4,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, current_timestamp, to_date
 from pyspark.sql.avro.functions import from_avro
 
-from src.bronze.schema_registry import get_schema
+from src.common.schema_registry import get_schema
 
 
 KAFKA_BOOTSTRAP = os.getenv(
