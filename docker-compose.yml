@@ -300,6 +300,25 @@ services:
       - datalake
       - traefik
 
+  iceberg-catalog-db:
+    image: docker.arvancloud.ir/postgres:16-alpine
+    container_name: iceberg-catalog-db
+    environment:
+      POSTGRES_USER: ${ICEBERG_CATALOG_DB_USER}
+      POSTGRES_PASSWORD: ${ICEBERG_CATALOG_DB_PASSWORD}
+      POSTGRES_DB: iceberg_catalog
+    volumes:
+      - iceberg_catalog_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ICEBERG_CATALOG_DB_USER} -d iceberg_catalog"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - datalake
+
   iceberg-rest:
     image: docker.arvancloud.ir/tabulario/iceberg-rest:1.6.0
     container_name: iceberg-rest
@@ -311,10 +330,15 @@ services:
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
       AWS_REGION: us-east-1
+      CATALOG_URI: jdbc:postgresql://iceberg-catalog-db:5432/iceberg_catalog
+      CATALOG_JDBC_USER: ${ICEBERG_CATALOG_DB_USER}
+      CATALOG_JDBC_PASSWORD: ${ICEBERG_CATALOG_DB_PASSWORD}
     ports:
       - "8181:8181"
     depends_on:
       minio:
+        condition: service_healthy
+      iceberg-catalog-db:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "echo > /dev/tcp/localhost/8181"]
@@ -421,3 +445,4 @@ volumes:
   spark_data:
   airflow_logs:
   airflow_auth:
+  iceberg_catalog_data:
