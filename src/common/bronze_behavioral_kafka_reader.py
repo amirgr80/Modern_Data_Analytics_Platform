@@ -15,13 +15,14 @@ from common.bronze_behavioral_transform import transform_bronze_behavioral
 from common.bronze_behavioral_minio_writer import write_bronze_stream_to_parquet
 from common.bronze_behavioral_spark_session import create_bronze_behavioral_spark_session
 from common.schema_registry import get_latest_schema_with_id
-
 from schemas.bronze_behavioral_schemas import BEHAVIORAL_SUBJECT
 
 
 DEFAULT_BRONZE_BASE_PATH = "s3a://bronze"
 
-DEFAULT_CHECKPOINT_BASE_PATH = "s3a://checkpoints/bronze"
+DEFAULT_CHECKPOINT_BASE_PATH = (
+    "s3a://checkpoints/bronze"
+)
 
 
 def get_behavioral_output_path() -> str:
@@ -42,7 +43,11 @@ def get_behavioral_output_path() -> str:
 
 def get_behavioral_checkpoint_path() -> str:
     """
-    Returns Bronze Behavioral checkpoint path.
+    Returns checkpoint location.
+
+    Checkpoints are stored separately from Bronze data
+    to avoid accidental deletion during data lifecycle
+    operations.
     """
 
     checkpoint_base_path = os.getenv(
@@ -64,7 +69,7 @@ def run_bronze_behavioral_job() -> None:
 
     1. Load Avro schema from Schema Registry.
     2. Create Spark Session.
-    3. Read raw events from Kafka through Kafka reader.
+    3. Read raw events from Kafka.
     4. Decode and transform events.
     5. Validate and enrich Bronze data.
     6. Write Parquet files into MinIO.
@@ -75,8 +80,8 @@ def run_bronze_behavioral_job() -> None:
         BEHAVIORAL_SUBJECT,
     )
 
-    avro_schema, schema_id = get_latest_schema_with_id(
-        schema_subject
+    avro_schema, schema_id = (
+        get_latest_schema_with_id(schema_subject)
     )
 
     if not avro_schema:
@@ -115,7 +120,9 @@ def run_bronze_behavioral_job() -> None:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Run Bronze Behavioral Streaming Job"
+        description=(
+            "Run Bronze Behavioral Streaming Job"
+        )
     )
 
     return parser.parse_args()

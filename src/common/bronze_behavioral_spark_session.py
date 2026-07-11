@@ -12,7 +12,7 @@ DEFAULT_SPARK_PACKAGES = ",".join(
 )
 
 
-def create_spark_session(app_name: str = "bronze-behavioral-job") -> SparkSession:
+def create_bronze_behavioral_spark_session(app_name: str = "bronze-behavioral-job") -> SparkSession:
     """
     Create a SparkSession for the Bronze behavioral streaming job.
 
@@ -29,15 +29,19 @@ def create_spark_session(app_name: str = "bronze-behavioral-job") -> SparkSessio
     minio_access_key = (
         os.getenv("MINIO_ACCESS_KEY")
         or os.getenv("MINIO_ROOT_USER")
-        or "minioadmin"
     )
 
     minio_secret_key = (
         os.getenv("MINIO_SECRET_KEY")
         or os.getenv("MINIO_ROOT_PASSWORD")
-        or "minioadmin"
     )
 
+    if not minio_access_key or not minio_secret_key:
+        raise RuntimeError(
+            "MinIO credentials are not configured. "
+            "Please set MINIO_ACCESS_KEY/MINIO_SECRET_KEY "
+            "or MINIO_ROOT_USER/MINIO_ROOT_PASSWORD."
+        )
     spark_packages = os.getenv("SPARK_PACKAGES", DEFAULT_SPARK_PACKAGES)
 
     spark = (
