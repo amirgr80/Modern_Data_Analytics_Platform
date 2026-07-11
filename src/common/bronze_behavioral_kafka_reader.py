@@ -14,7 +14,7 @@ from common.bronze_behavioral_kafka_reader import read_behavioral_kafka_stream
 from common.bronze_behavioral_transform import transform_bronze_behavioral
 from common.bronze_behavioral_minio_writer import write_bronze_stream_to_parquet
 from common.bronze_behavioral_spark_session import create_bronze_behavioral_spark_session
-from common.schema_registry import get_latest_schema_with_id
+from common.registry_client import get_latest_schema_with_id
 from schemas.bronze_behavioral_schemas import BEHAVIORAL_SUBJECT
 
 
