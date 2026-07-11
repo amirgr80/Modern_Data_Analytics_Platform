@@ -81,13 +81,23 @@ flowchart LR
     ICEBERG -.-> CH
     CH -.-> MB
 
-    classDef implemented fill:#1f6f43,stroke:#14432a,color:#ffffff
-    classDef planned fill:#3a3f47,stroke:#20242a,color:#d7dade,stroke-dasharray: 4 3
-    classDef external fill:#2b4a66,stroke:#173347,color:#ffffff
+    classDef external fill:#1f3a52,stroke:#2f5d82,color:#ffffff
+    classDef bronzeNode fill:#4a3018,stroke:#8a5a2b,color:#ffffff
+    classDef silverNode fill:#3a3d42,stroke:#8b8f97,color:#ffffff,stroke-dasharray: 4 3
+    classDef goldNode fill:#4a3f18,stroke:#a8862c,color:#ffffff,stroke-dasharray: 4 3
+    classDef purpleNode fill:#3a2a4a,stroke:#6f4c9e,color:#ffffff,stroke-dasharray: 4 3
 
-    class SPARK,MINIOB implemented
-    class AIRFLOW,ICEBERG,CH,MB planned
     class KAFKA,SR external
+    class SPARK,MINIOB bronzeNode
+    class AIRFLOW,ICEBERG silverNode
+    class CH goldNode
+    class MB purpleNode
+
+    style EXT fill:#16232f,stroke:#2f5d82,color:#dbe8f2
+    style BRONZE fill:#2b1f16,stroke:#8a5a2b,color:#f0ded0
+    style SILVER fill:#24262a,stroke:#8b8f97,color:#e4e6ea
+    style GOLD fill:#2b2614,stroke:#a8862c,color:#f0e6c0
+    style VIZ fill:#211a2b,stroke:#6f4c9e,color:#e4dbf2
 ```
 
 Solid nodes/edges are implemented today. Dashed nodes/edges represent infrastructure that is already provisioned in `docker-compose.yml` (Airflow, Iceberg REST catalog, ClickHouse, Metabase) but has no pipeline code writing to or reading from it yet.
