@@ -8,7 +8,9 @@ x-pipeline-env: &pipeline-env
   SPARK_MASTER_URL: "spark://spark-master:7077"
 
 x-airflow-common: &airflow-common
-  image: docker.arvancloud.ir/apache/airflow:3.2.1-python3.12
+  build:
+    context: .
+    dockerfile: configs/airflow/Dockerfile
   environment: &airflow-common-env
     TZ: Asia/Tehran
     _PIP_ADDITIONAL_REQUIREMENTS: >-
