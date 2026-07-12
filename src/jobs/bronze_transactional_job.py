@@ -1,11 +1,15 @@
 import logging
 import sys
 
-from common.kafka_reader import read_kafka_topic
-from common.minio_writer import write_transactional_stream
-from common.spark_session import create_spark_session
-from schema.transactional_schemas import TRANSACTIONAL_SCHEMAS
-from transformations.bronze_transform_transactional import (
+from common.bronze_transactional_kafka_reader import read_kafka_topic
+from common.bronze_transactional_minio_writer import write_transactional_stream
+from common.bronze_transactional_spark_session import create_spark_session
+from schemas.bronze_transactional_schemas import (
+    TRANSACTIONAL_SCHEMAS,
+    TRANSACTIONAL_TOPICS,
+    validate_transactional_configuration,
+)
+from common.bronze_transactional_transform import (
     transform_bronze_transactional,
 )
 
@@ -23,21 +27,33 @@ def main() -> None:
     queries = []
 
     try:
+        validate_transactional_configuration()
+
         spark = create_spark_session()
 
         logger.info(
             "Bronze Transactional job started."
         )
 
-        for table_name, table_schema in TRANSACTIONAL_SCHEMAS.items():
+        logger.info(
+            "Configured logical tables: %s",
+            ", ".join(TRANSACTIONAL_SCHEMAS.keys()),
+        )
+
+        for table_name, table_schema in (
+            TRANSACTIONAL_SCHEMAS.items()
+        ):
+            kafka_topic_name = TRANSACTIONAL_TOPICS[table_name]
+
             logger.info(
-                "Configuring transactional topic '%s'.",
+                "Configuring table '%s' from Kafka topic '%s'.",
                 table_name,
+                kafka_topic_name,
             )
 
             kafka_df = read_kafka_topic(
                 spark=spark,
-                topic_name=table_name,
+                topic_name=kafka_topic_name,
             )
 
             transformed_df = transform_bronze_transactional(
@@ -61,6 +77,11 @@ def main() -> None:
 
         spark.streams.awaitAnyTermination()
 
+    except KeyboardInterrupt:
+        logger.info(
+            "Bronze Transactional job interrupted by user."
+        )
+
     except Exception:
         logger.exception(
             "Bronze Transactional job failed."
@@ -69,8 +90,14 @@ def main() -> None:
 
     finally:
         for query in queries:
-            if query.isActive:
-                query.stop()
+            try:
+                if query.isActive:
+                    query.stop()
+            except Exception:
+                logger.exception(
+                    "Failed to stop streaming query '%s'.",
+                    query.name,
+                )
 
         if spark is not None:
             spark.stop()
