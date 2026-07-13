@@ -103,7 +103,7 @@ def write_transactional_stream(
     Start one streaming writer for a transactional topic.
     """
 
-    bucket_name = get_required_env("MINIO_BUCKET")
+    bucket_name = "bronze"
 
     trigger_interval = os.getenv(
         "BRONZE_TRIGGER_INTERVAL",
