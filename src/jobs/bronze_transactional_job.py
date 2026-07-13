@@ -75,7 +75,7 @@ def main() -> None:
             ", ".join(TRANSACTIONAL_SCHEMAS.keys()),
         )
 
-        spark.streams.awaitAnyTermination()
+        query.awaitTermination()
 
     except KeyboardInterrupt:
         logger.info(
