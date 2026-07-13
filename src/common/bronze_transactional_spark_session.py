@@ -1,27 +1,30 @@
-import logging
 import os
 
 from pyspark.sql import SparkSession
 
 
-logger = logging.getLogger(__name__)
+DEFAULT_SPARK_PACKAGES = ",".join(
+    [
+        "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3",
+        "org.apache.hadoop:hadoop-aws:3.3.4",
+        "com.amazonaws:aws-java-sdk-bundle:1.12.262",
+    ]
+)
 
 
-def get_required_env(variable_name: str) -> str:
+def create_bronze_transactional_spark_session(
+    app_name: str = "bronze-transactional-job",
+) -> SparkSession:
+    """
+    Create a SparkSession for the Bronze transactional streaming job.
 
-    value = os.getenv(variable_name)
+    This session is configured for:
+    - Reading transactional topics from Kafka
+    - Parsing JSON payloads with predefined Spark schemas
+    - Writing Parquet files to MinIO through the s3a filesystem
+    """
 
-    if value is None or not value.strip():
-        raise ValueError(
-            f"Required environment variable '{variable_name}' is not set."
-        )
-
-    return value.strip()
-
-
-def create_spark_session() -> SparkSession:
-
-    spark_master_url = os.getenv(
+    spark_master = os.getenv(
         "SPARK_MASTER_URL",
         "spark://spark-master:7077",
     )
@@ -31,29 +34,40 @@ def create_spark_session() -> SparkSession:
         "http://minio:9000",
     )
 
-    minio_access_key = get_required_env("MINIO_ROOT_USER")
-    minio_secret_key = get_required_env("MINIO_ROOT_PASSWORD")
+    minio_access_key = (
+        os.getenv("MINIO_ACCESS_KEY")
+        or os.getenv("MINIO_ROOT_USER")
+    )
 
-    logger.info("Creating SparkSession")
-    logger.info("Spark master URL: %s", spark_master_url)
-    logger.info("MinIO endpoint: %s", minio_endpoint)
+    minio_secret_key = (
+        os.getenv("MINIO_SECRET_KEY")
+        or os.getenv("MINIO_ROOT_PASSWORD")
+    )
+
+    if not minio_access_key or not minio_secret_key:
+        raise RuntimeError(
+            "MinIO credentials are not configured. "
+            "Set MINIO_ACCESS_KEY/MINIO_SECRET_KEY "
+            "or MINIO_ROOT_USER/MINIO_ROOT_PASSWORD."
+        )
+
+    spark_packages = os.getenv(
+        "SPARK_PACKAGES",
+        DEFAULT_SPARK_PACKAGES,
+    )
 
     spark = (
         SparkSession.builder
-        .appName("bronze-transactional-streaming")
-        .master(spark_master_url)
+        .appName(app_name)
+        .master(spark_master)
+
+        # Required packages for Kafka and MinIO/S3A
         .config(
-            "spark.sql.session.timeZone",
-            "UTC",
+            "spark.jars.packages",
+            spark_packages,
         )
-        .config(
-            "spark.serializer",
-            "org.apache.spark.serializer.KryoSerializer",
-        )
-        .config(
-            "spark.hadoop.fs.s3a.impl",
-            "org.apache.hadoop.fs.s3a.S3AFileSystem",
-        )
+
+        # MinIO / S3A configuration
         .config(
             "spark.hadoop.fs.s3a.endpoint",
             minio_endpoint,
@@ -71,13 +85,36 @@ def create_spark_session() -> SparkSession:
             "true",
         )
         .config(
-            "spark.hadoop.fs.s3a.connection.ssl.enabled",
-            "false",
+            "spark.hadoop.fs.s3a.impl",
+            "org.apache.hadoop.fs.s3a.S3AFileSystem",
         )
         .config(
             "spark.hadoop.fs.s3a.aws.credentials.provider",
             "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
         )
+        .config(
+            "spark.hadoop.fs.s3a.endpoint.region",
+            "us-east-1",
+        )
+        .config(
+            "spark.hadoop.fs.s3a.connection.ssl.enabled",
+            "false",
+        )
+
+        # Spark SQL configuration
+        .config(
+            "spark.sql.session.timeZone",
+            "UTC",
+        )
+        .config(
+            "spark.sql.shuffle.partitions",
+            os.getenv(
+                "SPARK_SQL_SHUFFLE_PARTITIONS",
+                "4",
+            ),
+        )
+
+        # Avoid generating _SUCCESS files
         .config(
             "spark.hadoop.mapreduce.fileoutputcommitter.marksuccessfuljobs",
             "false",
@@ -87,11 +124,6 @@ def create_spark_session() -> SparkSession:
 
     spark.sparkContext.setLogLevel(
         os.getenv("SPARK_LOG_LEVEL", "WARN")
-    )
-
-    logger.info(
-        "SparkSession created successfully. Spark version: %s",
-        spark.version,
     )
 
     return spark
