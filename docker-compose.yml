@@ -3,8 +3,10 @@ x-pipeline-env: &pipeline-env
   MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
   MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
   KAFKA_BOOTSTRAP_SERVERS: "185.255.90.14:9092"
-  ICEBERG_REST_URI: "http://iceberg-rest:8181"
+  ICEBERG_CATALOG_NAME: "lakekeeper"
+  ICEBERG_REST_URI: "http://lakekeeper:8181/catalog"
   ICEBERG_WAREHOUSE: "s3://warehouse"
+  ICEBERG_NAMESPACE: "silver"
   SPARK_MASTER_URL: "spark://spark-master:7077"
 
 x-airflow-common: &airflow-common
@@ -37,8 +39,10 @@ x-airflow-common: &airflow-common
     MINIO_ENDPOINT: "http://minio:9000"
     MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
     MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
-    ICEBERG_REST_URI: "http://iceberg-rest:8181"
+    ICEBERG_CATALOG_NAME: "lakekeeper"
+    ICEBERG_REST_URI: "http://lakekeeper:8181/catalog"
     ICEBERG_WAREHOUSE: "s3://warehouse"
+    ICEBERG_NAMESPACE: "silver"
     CLICKHOUSE_HOST: clickhouse
     CLICKHOUSE_HTTP_PORT: "8123"
     CLICKHOUSE_DB: lakehouse
@@ -101,6 +105,7 @@ services:
       TZ: Asia/Tehran
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./configs:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d airflow"]
       interval: 10s
@@ -300,28 +305,35 @@ services:
       - datalake
       - traefik
 
-  iceberg-rest:
-    image: docker.arvancloud.ir/tabulario/iceberg-rest:1.6.0
-    container_name: iceberg-rest
+  lakekeeper:
+    image: docker.arvancloud.ir/tabulario/lakekeeper:latest
+    container_name: lakekeeper
     environment:
-      CATALOG_WAREHOUSE: "s3://warehouse"
-      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
-      CATALOG_S3_ENDPOINT: http://minio:9000
-      CATALOG_S3_PATH__STYLE__ACCESS: "true"
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
-      AWS_REGION: us-east-1
+      LAKEKEEPER__PG_DATABASE_URL_READ: >-
+        postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/lakekeeper
+      LAKEKEEPER__PG_DATABASE_URL_WRITE: >-
+        postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/lakekeeper
+      LAKEKEEPER__PG_ENCRYPTION_KEY: ${LAKEKEEPER_ENCRYPTION_KEY}
+      LAKEKEEPER__AUTHZ_BACKEND: allowall
+      RUST_LOG: info
+    command: ["serve"]
     ports:
       - "8181:8181"
     depends_on:
+      postgres:
+        condition: service_healthy
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "echo > /dev/tcp/localhost/8181"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://localhost:8181/health || exit 1"
+        ]
       interval: 15s
       timeout: 10s
       retries: 10
-      start_period: 15s
+      start_period: 30s
     restart: unless-stopped
     networks:
       - datalake
