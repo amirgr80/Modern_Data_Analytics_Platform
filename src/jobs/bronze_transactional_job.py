@@ -1,5 +1,13 @@
 import logging
+import os
 import sys
+
+
+CURRENT_FILE_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.dirname(CURRENT_FILE_DIR)
+
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
 from common.bronze_transactional_kafka_reader import read_kafka_topic
 from common.bronze_transactional_minio_writer import write_transactional_stream

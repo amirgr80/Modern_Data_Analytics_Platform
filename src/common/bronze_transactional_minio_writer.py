@@ -37,6 +37,7 @@ def create_microbatch_writer(
         batch_df: DataFrame,
         batch_id: int,
     ) -> None:
+
         if batch_df.isEmpty():
             logger.info(
                 "Micro-batch %s for table '%s' is empty.",
@@ -44,6 +45,25 @@ def create_microbatch_writer(
                 table_name,
             )
             return
+
+        logger.info(
+            "Batch %s row count: %s",
+            batch_id,
+            batch_df.count(),
+        )
+
+        logger.info(
+            "Batch %s columns: %s",
+            batch_id,
+            batch_df.columns,
+        )
+
+        batch_df.select(
+            "partition_date"
+        ).show(
+            10,
+            False,
+        )
 
         logger.info(
             "Writing micro-batch %s for table '%s'.",
@@ -57,12 +77,15 @@ def create_microbatch_writer(
             partition_dates = (
                 batch_df
                 .select("partition_date")
-                .where(col("partition_date").isNotNull())
+                .where(
+                    col("partition_date").isNotNull()
+                )
                 .distinct()
                 .collect()
             )
 
             for row in partition_dates:
+
                 partition_date = row["partition_date"]
 
                 output_path = (
@@ -85,7 +108,10 @@ def create_microbatch_writer(
                     .write
                     .mode("append")
                     .format("parquet")
-                    .option("compression", "snappy")
+                    .option(
+                        "compression",
+                        "snappy",
+                    )
                     .save(output_path)
                 )
 
@@ -132,7 +158,9 @@ def write_transactional_stream(
     return (
         dataframe
         .writeStream
-        .foreachBatch(microbatch_writer)
+        .foreachBatch(
+            microbatch_writer
+        )
         .option(
             "checkpointLocation",
             checkpoint_path,
