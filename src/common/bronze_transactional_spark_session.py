@@ -12,7 +12,7 @@ DEFAULT_SPARK_PACKAGES = ",".join(
 )
 
 
-def create_bronze_transactional_spark_session(
+def create_spark_session(
     app_name: str = "bronze-transactional-job",
 ) -> SparkSession:
     """
