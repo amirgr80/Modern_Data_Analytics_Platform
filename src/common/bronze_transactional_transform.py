@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 
 from pyspark.sql import DataFrame
@@ -18,21 +19,21 @@ logger = logging.getLogger(__name__)
 
 NULLABLE_STRING_FIELDS_BY_TABLE = {
     "categories": ["parent_category_id"],
-    "orders": ["payment_method"],
-    "users": ["loyalty_tier", "location"],
     "order_items": [],
+    "orders": ["payment_method"],
     "product_price_history": [],
     "products": [],
+    "users": ["loyalty_tier", "location"],
 }
 
 
 PARTITION_SOURCE_BY_TABLE = {
-    "orders": "event_timestamp",
-    "product_price_history": "valid_from_timestamp",
-    "users": "signup_date",
     "categories": "_kafka_timestamp",
     "order_items": "_kafka_timestamp",
+    "orders": "event_timestamp",
+    "product_price_history": "valid_from_timestamp",
     "products": "_kafka_timestamp",
+    "users": "signup_date",
 }
 
 
@@ -41,11 +42,11 @@ def parse_kafka_json(
     schema: StructType,
 ) -> DataFrame:
     """
-    Parse the Kafka message value using the exact schema
-    defined for the source topic.
+    Parse the Kafka binary payload from the `value` column
+    using the exact schema assigned to the source topic.
 
-    Kafka timestamp is retained because some transactional
-    topics do not contain a business timestamp in their payload.
+    Kafka metadata is retained for lineage and for determining
+    the partition date when the payload has no business timestamp.
     """
 
     return (
@@ -55,10 +56,16 @@ def parse_kafka_json(
                 col("value").cast("string"),
                 schema,
             ).alias("data"),
+            col("topic").alias("_kafka_topic"),
+            col("partition").alias("_kafka_partition"),
+            col("offset").alias("_kafka_offset"),
             col("timestamp").alias("_kafka_timestamp"),
         )
         .select(
             "data.*",
+            "_kafka_topic",
+            "_kafka_partition",
+            "_kafka_offset",
             "_kafka_timestamp",
         )
     )
@@ -69,22 +76,29 @@ def flatten_nullable_string_fields(
     fields: list[str],
 ) -> DataFrame:
     """
-    Convert nullable union-like objects such as:
+    Flatten nullable union-like structures.
 
-        {"string": "value"}
+    Input example:
+        {"string": "Gold"}
 
-    to a normal nullable string column.
+    Output:
+        "Gold"
 
-    If the object or its inner value is null,
-    the resulting column remains null.
+    If the outer struct or inner value is null, Spark preserves
+    the value as null without raising an error.
     """
 
     for field_name in fields:
-        if field_name in df.columns:
-            df = df.withColumn(
-                field_name,
-                col(f"{field_name}.string"),
+        if field_name not in df.columns:
+            raise ValueError(
+                f"Nullable field '{field_name}' does not exist "
+                "in the parsed DataFrame."
             )
+
+        df = df.withColumn(
+            field_name,
+            col(f"{field_name}.string"),
+        )
 
     return df
 
@@ -94,8 +108,8 @@ def standardize_transactional_dates(
     table_name: str,
 ) -> DataFrame:
     """
-    Apply only the initial date and timestamp conversions
-    required in the Bronze layer.
+    Perform only the lightweight date conversions required
+    by the Bronze layer.
     """
 
     if table_name == "orders":
@@ -129,7 +143,10 @@ def add_bronze_metadata(
 
     return (
         df
-        .withColumn("source_table", lit(table_name))
+        .withColumn(
+            "source_table",
+            lit(table_name),
+        )
         .withColumn(
             "bronze_ingestion_timestamp",
             current_timestamp(),
@@ -142,17 +159,26 @@ def add_partition_date(
     table_name: str,
 ) -> DataFrame:
     """
-    Create a single partition date column in yyyyMMdd format.
+    Create one technical partition field in yyyyMMdd format.
 
-    Examples:
-        20250213
-        20260710
+    The writer uses this value to construct paths such as:
+
+        bronze/transactional/orders/20260712/
     """
 
-    partition_source = PARTITION_SOURCE_BY_TABLE.get(
-        table_name,
-        "_kafka_timestamp",
-    )
+    if table_name not in PARTITION_SOURCE_BY_TABLE:
+        raise ValueError(
+            f"No partition source configured for table "
+            f"'{table_name}'."
+        )
+
+    partition_source = PARTITION_SOURCE_BY_TABLE[table_name]
+
+    if partition_source not in df.columns:
+        raise ValueError(
+            f"Partition source column '{partition_source}' "
+            f"does not exist for table '{table_name}'."
+        )
 
     return df.withColumn(
         "partition_date",
@@ -169,13 +195,21 @@ def transform_bronze_transactional(
     table_name: str,
 ) -> DataFrame:
     """
-    Execute the complete initial Bronze transformation
-    for one transactional Kafka topic.
+    Execute the complete Bronze transformation for one
+    transactional Kafka topic.
+
+    Processing order:
+        1. Parse Kafka value as JSON.
+        2. Apply the topic schema.
+        3. Flatten nullable string fields.
+        4. Standardize technical dates and timestamps.
+        5. Add Bronze metadata.
+        6. Generate the yyyyMMdd partition date.
     """
 
     if table_name not in NULLABLE_STRING_FIELDS_BY_TABLE:
         raise ValueError(
-            f"Unsupported transactional table: {table_name}"
+            f"Unsupported transactional table: '{table_name}'."
         )
 
     parsed_df = parse_kafka_json(
@@ -204,7 +238,7 @@ def transform_bronze_transactional(
     )
 
     logger.info(
-        "Bronze transformation configured for table '%s'",
+        "Bronze transformation configured for table '%s'.",
         table_name,
     )
 
