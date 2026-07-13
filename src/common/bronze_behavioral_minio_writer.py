@@ -21,7 +21,7 @@ def write_bronze_stream_to_parquet(
         s3a://bronze/behavioral/events
 
     Example checkpoint path:
-        s3a://checkpoints/bronze/behavioral/events
+        s3a://be-checkpoints/behavioral/events
 
     Partition columns:
         year, month, day

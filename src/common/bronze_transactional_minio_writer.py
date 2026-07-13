@@ -140,10 +140,7 @@ def write_transactional_stream(
         f"s3a://{bucket_name}/bronze/transactional"
     )
 
-    checkpoint_path = (
-        f"s3a://{bucket_name}/checkpoints/"
-        f"bronze/transactional/{table_name}"
-    )
+    checkpoint_path = f"s3a://tr-checkpoints/transactional/{table_name}"
 
     microbatch_writer = create_microbatch_writer(
         table_name=table_name,
