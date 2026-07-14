@@ -51,18 +51,40 @@ def create_microbatch_writer(
             batch_id,
             batch_df.count(),
         )
-
+        if table_name == "orders":
+    	    batch_df.select(
+                "timestamp",
+                "event_timestamp",
+                "partition_date",
+    	    ).limit(5).show(
+        	truncate=False
+    	    )
         logger.info(
             "Batch %s columns: %s",
             batch_id,
             batch_df.columns,
         )
 
-        batch_df.select(
+        logger.info(
+    	    "Distinct partition dates: %s",
+    	    (
+        	batch_df
+        	.select("partition_date")
+        	.distinct()
+        	.collect()
+    	    ),
+	)
+        logger.info(
+            "Null partition_date count: %s",
+        batch_df.filter(
+        	col("partition_date").isNull()
+    	).count(),
+	)
+        logger.info(
+            "Distinct partition dates: %s",
+    	batch_df.select(
             "partition_date"
-        ).show(
-            10,
-            False,
+        ).distinct().collect(),
         )
 
         logger.info(

@@ -12,6 +12,7 @@ from pyspark.sql.functions import (
     to_timestamp,
 )
 from pyspark.sql.types import StructType
+from common.bronze_transactional_avro import decode_confluent_avro
 
 
 logger = logging.getLogger(__name__)
@@ -95,10 +96,23 @@ def flatten_nullable_string_fields(
                 "in the parsed DataFrame."
             )
 
-        df = df.withColumn(
-            field_name,
-            col(f"{field_name}.string"),
-        )
+        field_type = dict(df.dtypes)[field_name]
+
+        if field_type.startswith("struct"):
+            df = df.withColumn(
+                field_name,
+                col(f"{field_name}.string"),
+            )
+        elif field_type == "string":
+            df = df.withColumn(
+                field_name,
+                col(field_name),
+            )
+        else:
+            raise ValueError(
+                f"Unsupported nullable field type for '{field_name}': "
+                f"{field_type}"
+            )
 
     return df
 
@@ -113,10 +127,10 @@ def standardize_transactional_dates(
     """
 
     if table_name == "orders":
-        df = df.withColumn(
+    	df = df.withColumn(
             "event_timestamp",
             to_timestamp(col("timestamp")),
-        )
+    	)
 
     elif table_name == "product_price_history":
         df = df.withColumn(
@@ -191,7 +205,8 @@ def add_partition_date(
 
 def transform_bronze_transactional(
     kafka_df: DataFrame,
-    schema: StructType,
+    avro_schema: str,
+    schema_id: int,
     table_name: str,
 ) -> DataFrame:
     """
@@ -212,9 +227,10 @@ def transform_bronze_transactional(
             f"Unsupported transactional table: '{table_name}'."
         )
 
-    parsed_df = parse_kafka_json(
+    parsed_df = decode_confluent_avro(
         kafka_df=kafka_df,
-        schema=schema,
+        avro_schema=avro_schema,
+        expected_schema_id=schema_id,
     )
 
     flattened_df = flatten_nullable_string_fields(

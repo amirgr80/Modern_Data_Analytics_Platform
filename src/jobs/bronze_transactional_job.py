@@ -21,6 +21,8 @@ from common.bronze_transactional_transform import (
     transform_bronze_transactional,
 )
 
+from common.registry_client import get_latest_schema_with_id
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +55,12 @@ def main() -> None:
         ):
             kafka_topic_name = TRANSACTIONAL_TOPICS[table_name]
 
+            schema_subject = f"{kafka_topic_name}-value"
+
+            avro_schema, schema_id = get_latest_schema_with_id(
+                schema_subject
+            )
+
             logger.info(
                 "Configuring table '%s' from Kafka topic '%s'.",
                 table_name,
@@ -66,7 +74,8 @@ def main() -> None:
 
             transformed_df = transform_bronze_transactional(
                 kafka_df=kafka_df,
-                schema=table_schema,
+                avro_schema=avro_schema,
+                schema_id=schema_id,
                 table_name=table_name,
             )
 
