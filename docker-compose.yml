@@ -261,8 +261,8 @@ services:
     environment:
       <<: *pipeline-env
       SPARK_NO_DAEMONIZE: "true"
-      SPARK_WORKER_CORES: "2"
-      SPARK_WORKER_MEMORY: 2G
+      SPARK_WORKER_CORES: "6"
+      SPARK_WORKER_MEMORY: 12G
     ports:
       - "8082:8081"
     volumes:

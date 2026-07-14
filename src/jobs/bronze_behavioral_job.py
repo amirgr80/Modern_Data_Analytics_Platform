@@ -21,7 +21,7 @@ from schemas.bronze_behavioral_schemas import BEHAVIORAL_SUBJECT
 
 DEFAULT_BRONZE_BASE_PATH = "s3a://bronze"
 
-DEFAULT_CHECKPOINT_BASE_PATH = "s3a://be-checkpoints/behavioral"
+DEFAULT_CHECKPOINT_BASE_PATH = "s3a://be-checkpoints"
 
 
 def get_behavioral_output_path() -> str:

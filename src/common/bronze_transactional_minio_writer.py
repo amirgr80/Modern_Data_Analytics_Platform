@@ -137,7 +137,7 @@ def write_transactional_stream(
     )
 
     output_base_path = (
-        f"s3a://{bucket_name}/bronze/transactional"
+        f"s3a://{bucket_name}/transactional"
     )
 
     checkpoint_path = f"s3a://tr-checkpoints/transactional/{table_name}"
