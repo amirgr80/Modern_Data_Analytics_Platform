@@ -37,6 +37,7 @@ def create_microbatch_writer(
         batch_df: DataFrame,
         batch_id: int,
     ) -> None:
+
         if batch_df.isEmpty():
             logger.info(
                 "Micro-batch %s for table '%s' is empty.",
@@ -44,6 +45,47 @@ def create_microbatch_writer(
                 table_name,
             )
             return
+
+        logger.info(
+            "Batch %s row count: %s",
+            batch_id,
+            batch_df.count(),
+        )
+        if table_name == "orders":
+    	    batch_df.select(
+                "timestamp",
+                "event_timestamp",
+                "partition_date",
+    	    ).limit(5).show(
+        	truncate=False
+    	    )
+        logger.info(
+            "Batch %s columns: %s",
+            batch_id,
+            batch_df.columns,
+        )
+
+        logger.info(
+    	    "Distinct partition dates: %s",
+    	    (
+        	batch_df
+        	.select("partition_date")
+        	.distinct()
+        	.collect()
+    	    ),
+	)
+        logger.info(
+            "Null partition_date count: %s",
+        batch_df.filter(
+        	col("partition_date").isNull()
+    	).count(),
+	)
+        logger.info(
+            "Distinct partition dates: %s",
+    	batch_df.select(
+            "partition_date"
+        ).distinct().collect(),
+        )
 
         logger.info(
             "Writing micro-batch %s for table '%s'.",
@@ -57,12 +99,15 @@ def create_microbatch_writer(
             partition_dates = (
                 batch_df
                 .select("partition_date")
-                .where(col("partition_date").isNotNull())
+                .where(
+                    col("partition_date").isNotNull()
+                )
                 .distinct()
                 .collect()
             )
 
             for row in partition_dates:
+
                 partition_date = row["partition_date"]
 
                 output_path = (
@@ -85,7 +130,10 @@ def create_microbatch_writer(
                     .write
                     .mode("append")
                     .format("parquet")
-                    .option("compression", "snappy")
+                    .option(
+                        "compression",
+                        "snappy",
+                    )
                     .save(output_path)
                 )
 
@@ -103,7 +151,7 @@ def write_transactional_stream(
     Start one streaming writer for a transactional topic.
     """
 
-    bucket_name = get_required_env("MINIO_BUCKET")
+    bucket_name = "bronze"
 
     trigger_interval = os.getenv(
         "BRONZE_TRIGGER_INTERVAL",
@@ -111,13 +159,10 @@ def write_transactional_stream(
     )
 
     output_base_path = (
-        f"s3a://{bucket_name}/bronze/transactional"
+        f"s3a://{bucket_name}/transactional"
     )
 
-    checkpoint_path = (
-        f"s3a://{bucket_name}/checkpoints/"
-        f"bronze/transactional/{table_name}"
-    )
+    checkpoint_path = f"s3a://tr-checkpoints/transactional/{table_name}"
 
     microbatch_writer = create_microbatch_writer(
         table_name=table_name,
@@ -132,7 +177,9 @@ def write_transactional_stream(
     return (
         dataframe
         .writeStream
-        .foreachBatch(microbatch_writer)
+        .foreachBatch(
+            microbatch_writer
+        )
         .option(
             "checkpointLocation",
             checkpoint_path,

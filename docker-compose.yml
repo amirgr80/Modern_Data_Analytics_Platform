@@ -3,6 +3,7 @@ x-pipeline-env: &pipeline-env
   MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
   MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
   KAFKA_BOOTSTRAP_SERVERS: "185.255.90.14:9092"
+  SCHEMA_REGISTRY_URL: ${SCHEMA_REGISTRY_URL}
   ICEBERG_REST_URI: "http://iceberg-rest:8181"
   ICEBERG_WAREHOUSE: "s3://warehouse"
   SPARK_MASTER_URL: "spark://spark-master:7077"
@@ -262,8 +263,8 @@ services:
     environment:
       <<: *pipeline-env
       SPARK_NO_DAEMONIZE: "true"
-      SPARK_WORKER_CORES: "2"
-      SPARK_WORKER_MEMORY: 2G
+      SPARK_WORKER_CORES: "6"
+      SPARK_WORKER_MEMORY: 12G
     ports:
       - "8082:8081"
     volumes:
