@@ -89,7 +89,10 @@ with DAG(
         # a local session (the code reads that env var), so the job runs
         # in-process in the Airflow worker -- no Spark-cluster networking.
         bash_command=(
-            "SPARK_MASTER_URL='local[*]' spark-submit --master 'local[*]' "
+            "SPARK_MASTER_URL='local[*]' "
+            "ICEBERG_REST_URI='http://lakekeeper:8181/catalog' "
+            "ICEBERG_WAREHOUSE='warehouse' "
+            "spark-submit --master 'local[*]' "
             f"--packages {SPARK_PACKAGES} "
             f"{SILVER_JOB_PATH} "
             "--execution-date {{ ds }}"
