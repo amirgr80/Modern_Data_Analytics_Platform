@@ -14,7 +14,8 @@ from pyspark.sql.functions import (
 from common.silver_transactional_bronze_reader import (
     read_bronze_transactional_table,
 )
-from common.iceberg_session import (
+
+from common.silver_transactional_spark_session import (
     create_iceberg_spark_session,
 )
 
