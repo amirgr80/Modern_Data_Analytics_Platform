@@ -13,8 +13,9 @@ from pyspark.sql.functions import (
     to_timestamp,
     trim,
     year,
+    sha2,
+    concat_ws,
 )
-
 from schemas.bronze_behavioral_schemas import BEHAVIORAL_ALL_COLUMNS
 
 
@@ -98,7 +99,7 @@ def decode_confluent_avro(
             expr(
                 """
                 case
-                    when length(raw_value) < 5 then 'message_too_short'
+                   when length(raw_value) < 5 then 'message_too_short'
                     when magic_byte != X'00' then 'invalid_magic_byte'
                     when not decode_success then 'avro_decode_failed'
                     when not schema_id_matches then 'schema_id_mismatch'
@@ -151,9 +152,21 @@ def standardize_behavioral_events(df: DataFrame) -> DataFrame:
     df = trim_string_columns(df)
 
     return (
-        df
-        .withColumn("event_type", lower(col("event_type")))
-        .withColumn("device_type", lower(col("device_type")))
+    df
+    .withColumn(
+        "event_id",
+        sha2(
+            concat_ws(
+                "||",
+                col("kafka_topic"),
+                col("kafka_partition").cast("string"),
+                col("kafka_offset").cast("string"),
+            ),
+            256,
+        ),
+    )
+    .withColumn("event_type", lower(col("event_type")))
+    .withColumn("device_type", lower(col("device")))
         .withColumn(
             "event_timestamp",
             coalesce(
