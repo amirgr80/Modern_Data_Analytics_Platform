@@ -3,7 +3,7 @@ from collections.abc import Sequence
 
 from pyspark.sql import DataFrame, SparkSession
 
-from configs.silver_transactional_config import (
+from conf.silver_transactional_config import (
     BRONZE_TRANSACTIONAL_BASE_PATH,
     SUPPORTED_TRANSACTIONAL_TABLES,
 )
