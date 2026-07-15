@@ -3,10 +3,13 @@ from collections.abc import Sequence
 
 from pyspark.sql import DataFrame, SparkSession
 
-from conf.silver_transactional_config import (
+import sys
+sys.path.append('/opt/spark/conf')
+from silver_transactional_config import (
     BRONZE_TRANSACTIONAL_BASE_PATH,
     SUPPORTED_TRANSACTIONAL_TABLES,
 )
+
 
 
 logger = logging.getLogger(__name__)
