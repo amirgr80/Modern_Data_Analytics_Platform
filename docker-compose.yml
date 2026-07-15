@@ -353,6 +353,146 @@ services:
     networks:
       - datalake
 
+# ===== ADDED: Lakekeeper Iceberg REST catalog (additive; nothing else changed).
+  # The Silver pipeline targets Lakekeeper via env vars set inline in the DAG,
+  # so the shared env anchors and tabulario iceberg-rest stay untouched. =====
+
+  createbuckets:
+    image: docker.arvancloud.ir/minio/minio:RELEASE.2024-12-18T13-15-44Z
+    container_name: createbuckets
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
+        mc mb --ignore-existing "local/${ICEBERG_WAREHOUSE_BUCKET:-warehouse}"
+        mc mb --ignore-existing "local/${MINIO_BRONZE_BUCKET:-bronze}"
+        echo "buckets ready"
+    restart: "no"
+    networks:
+      - datalake
+
+  # Dedicated Postgres so Lakekeeper's migration never touches the DB tabulario uses.
+  lakekeeper-db:
+    image: docker.arvancloud.ir/postgres:16-alpine
+    container_name: lakekeeper-db
+    environment:
+      POSTGRES_USER: ${ICEBERG_CATALOG_DB_USER}
+      POSTGRES_PASSWORD: ${ICEBERG_CATALOG_DB_PASSWORD}
+      POSTGRES_DB: lakekeeper
+    volumes:
+      - lakekeeper_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ICEBERG_CATALOG_DB_USER} -d lakekeeper"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - datalake
+
+  lakekeeper-migrate:
+    image: ${LAKEKEEPER_IMAGE:-docker.arvancloud.ir/vakamo/lakekeeper:latest-main}
+    container_name: lakekeeper-migrate
+    environment:
+      LAKEKEEPER__PG_ENCRYPTION_KEY: ${LAKEKEEPER_PG_ENCRYPTION_KEY}
+      LAKEKEEPER__PG_DATABASE_URL_READ: postgresql://${ICEBERG_CATALOG_DB_USER}:${ICEBERG_CATALOG_DB_PASSWORD}@lakekeeper-db:5432/lakekeeper
+      LAKEKEEPER__PG_DATABASE_URL_WRITE: postgresql://${ICEBERG_CATALOG_DB_USER}:${ICEBERG_CATALOG_DB_PASSWORD}@lakekeeper-db:5432/lakekeeper
+      RUST_LOG: info
+    command: ["migrate"]
+    depends_on:
+      lakekeeper-db:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - datalake
+
+  lakekeeper:
+    image: ${LAKEKEEPER_IMAGE:-docker.arvancloud.ir/vakamo/lakekeeper:latest-main}
+    container_name: lakekeeper
+    environment:
+      LAKEKEEPER__PG_ENCRYPTION_KEY: ${LAKEKEEPER_PG_ENCRYPTION_KEY}
+      LAKEKEEPER__PG_DATABASE_URL_READ: postgresql://${ICEBERG_CATALOG_DB_USER}:${ICEBERG_CATALOG_DB_PASSWORD}@lakekeeper-db:5432/lakekeeper
+      LAKEKEEPER__PG_DATABASE_URL_WRITE: postgresql://${ICEBERG_CATALOG_DB_USER}:${ICEBERG_CATALOG_DB_PASSWORD}@lakekeeper-db:5432/lakekeeper
+      RUST_LOG: info
+    command: ["serve"]
+    ports:
+      - "8182:8181"   # host 8182 avoids clashing with tabulario on 8181; internal is still lakekeeper:8181
+    depends_on:
+      lakekeeper-migrate:
+        condition: service_completed_successfully
+      lakekeeper-db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      createbuckets:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/home/nonroot/lakekeeper", "healthcheck"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - datalake
+
+  lakekeeper-bootstrap:
+    image: docker.arvancloud.ir/curlimages/curl:8.11.1
+    container_name: lakekeeper-bootstrap
+    depends_on:
+      lakekeeper:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        code=$$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+          http://lakekeeper:8181/management/v1/bootstrap \
+          -H "Content-Type: application/json" \
+          -d '{"accept-terms-of-use": true}')
+        echo "bootstrap -> HTTP $$code"
+        case "$$code" in 200|201|204|400|409) exit 0 ;; *) exit 1 ;; esac
+    restart: "no"
+    networks:
+      - datalake
+
+  lakekeeper-warehouse-init:
+    image: docker.arvancloud.ir/curlimages/curl:8.11.1
+    container_name: lakekeeper-warehouse-init
+    depends_on:
+      lakekeeper:
+        condition: service_healthy
+      lakekeeper-bootstrap:
+        condition: service_completed_successfully
+      createbuckets:
+        condition: service_completed_successfully
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      WAREHOUSE_NAME: ${ICEBERG_WAREHOUSE_NAME:-warehouse}
+      WAREHOUSE_BUCKET: ${ICEBERG_WAREHOUSE_BUCKET:-warehouse}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        body="{\"warehouse-name\":\"$${WAREHOUSE_NAME}\",\"project-id\":\"00000000-0000-0000-0000-000000000000\",\"delete-profile\":{\"type\":\"hard\"},\"storage-profile\":{\"type\":\"s3\",\"bucket\":\"$${WAREHOUSE_BUCKET}\",\"key-prefix\":\"lakehouse\",\"endpoint\":\"http://minio:9000\",\"region\":\"us-east-1\",\"path-style-access\":true,\"flavor\":\"s3-compat\",\"sts-enabled\":false},\"storage-credential\":{\"type\":\"s3\",\"credential-type\":\"access-key\",\"aws-access-key-id\":\"$${MINIO_ROOT_USER}\",\"aws-secret-access-key\":\"$${MINIO_ROOT_PASSWORD}\"}}"
+        code=$$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+          http://lakekeeper:8181/management/v1/warehouse \
+          -H "Content-Type: application/json" \
+          -d "$$body")
+        echo "warehouse create -> HTTP $$code"
+        case "$$code" in 200|201|409) exit 0 ;; *) exit 1 ;; esac
+    restart: "no"
+    networks:
+      - datalake
+  # ===== END ADDED =====
+
   clickhouse:
     image: docker.arvancloud.ir/clickhouse/clickhouse-server:24.8
     container_name: clickhouse
@@ -449,3 +589,4 @@ volumes:
   airflow_logs:
   airflow_auth:
   iceberg_catalog_data:
+  lakekeeper_db_data:
