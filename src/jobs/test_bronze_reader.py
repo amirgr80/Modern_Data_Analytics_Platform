@@ -12,10 +12,7 @@ from pyspark.sql.functions import (
     min as spark_min,
     max as spark_max,
 )
-<<<<<<< HEAD
-=======
 
->>>>>>> feature/silver-transactional
 from common.silver_transactional_bronze_reader import (
     read_bronze_transactional_table,
 )
