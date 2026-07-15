@@ -61,11 +61,21 @@ def read_bronze_behavioral_partition(
 
     df = spark.read.parquet(bronze_path)
 
-    return df.where(
+    df = df.where(
         (F.col("year") == execution_date.year)
         & (F.col("month") == execution_date.month)
         & (F.col("day") == execution_date.day)
     )
+
+    # Bronze standardizes the raw device field into `device_type` and drops the
+    # raw column, but the Silver star schema uses `device`. Normalize here, at
+    # the single Bronze->Silver boundary, so dim_device / fact / quarantine
+    # builders can all reference col("device") unchanged. Defensive: only
+    # renames when Bronze actually emitted device_type and not device.
+    if "device" not in df.columns and "device_type" in df.columns:
+        df = df.withColumnRenamed("device_type", "device")
+
+    return df
 
 
 def deduplicate_events(df: DataFrame) -> DataFrame:
