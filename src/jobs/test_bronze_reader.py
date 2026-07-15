@@ -1,6 +1,7 @@
 import argparse
 import logging
 import sys
+from typing import Dict
 
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import (
@@ -12,10 +13,9 @@ from pyspark.sql.functions import (
     max as spark_max,
 )
 
-from common.bronze_reader import (
+from common.silver_transactional_bronze_reader import (
     read_bronze_transactional_table,
 )
-
 from common.silver_transactional_spark_session import (
     create_iceberg_spark_session,
 )
@@ -98,10 +98,6 @@ def validate_metadata_columns(dataframe: DataFrame) -> None:
 def build_file_statistics(
     dataframe: DataFrame,
 ) -> DataFrame:
-    """
-    Return one row per physical Parquet file.
-    """
-
     return (
         dataframe
         .withColumn(
@@ -130,10 +126,6 @@ def build_file_statistics(
 def build_kafka_partition_statistics(
     dataframe: DataFrame,
 ) -> DataFrame:
-    """
-    Show record and offset statistics for each Kafka partition.
-    """
-
     return (
         dataframe
         .groupBy(
@@ -162,9 +154,8 @@ def build_kafka_partition_statistics(
 def calculate_summary(
     dataframe: DataFrame,
     file_statistics_df: DataFrame,
-) -> dict[str, int]:
+) -> Dict[str, int]:
     total_records = dataframe.count()
-
     parquet_file_count = file_statistics_df.count()
 
     distinct_kafka_messages = (
@@ -188,9 +179,7 @@ def calculate_summary(
         .count()
     )
 
-    duplicate_kafka_records = (
-        total_records - distinct_kafka_messages
-    )
+    duplicate_kafka_records = total_records - distinct_kafka_messages
 
     return {
         "parquet_file_count": parquet_file_count,
@@ -203,8 +192,8 @@ def calculate_summary(
 
 def print_summary(
     table_name: str,
-    summary: dict[str, int],
-    expected_kafka_messages: int | None,
+    summary: Dict[str, int],
+    expected_kafka_messages,
 ) -> bool:
     print("\n" + "=" * 70)
     print(f"BRONZE READ TEST RESULT — {table_name}")
