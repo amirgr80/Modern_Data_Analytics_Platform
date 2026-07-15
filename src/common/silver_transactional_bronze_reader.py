@@ -5,19 +5,13 @@ from typing import List, Optional, Sequence, Union
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.functions import input_file_name
 
-<<<<<<< HEAD
-import sys
-sys.path.append('/opt/spark/conf')
-=======
 
 sys.path.append("/opt/spark/conf")
 
->>>>>>> feature/silver-transactional
 from silver_transactional_config import (
     BRONZE_TRANSACTIONAL_BASE_PATH,
     SUPPORTED_TRANSACTIONAL_TABLES,
 )
-
 
 
 logger = logging.getLogger(__name__)
