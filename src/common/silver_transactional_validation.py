@@ -206,13 +206,7 @@ def validate_table_name(table_name: str) -> None:
 
 
 def build_original_record(df: DataFrame):
-    """
-    کل رکورد اولیه را به JSON تبدیل می‌کند.
-
-    ستون‌های Binary مثل _raw_value ابتدا Base64 می‌شوند
-    تا to_json به خطا نخورد.
-    """
-
+    #transform to json
     json_columns = []
 
     for field in df.schema.fields:
@@ -234,13 +228,7 @@ def prepare_columns(
     df: DataFrame,
     table_name: str,
 ) -> DataFrame:
-    """
-    ستون‌های اختیاری گمشده را null می‌سازد و Cast امن انجام می‌دهد.
-
-    try_cast باعث می‌شود مقدار خراب به null تبدیل شود،
-    نه اینکه کل Spark Job متوقف شود.
-    """
-
+    #casting an dturn into null, avoid failing whole job:
     expected_columns = EXPECTED_COLUMNS[table_name]
 
     for field_name in expected_columns:
@@ -250,7 +238,16 @@ def prepare_columns(
                 F.lit(None),
             )
 
+    # keep the original value before casting
     for field_name, target_type in TARGET_TYPES[table_name].items():
+        original_column_name = (
+            f"_before_cast_{field_name}"
+        )
+        df = df.withColumn(
+            original_column_name,
+            F.col(field_name),
+        )
+
         df = df.withColumn(
             field_name,
             F.expr(
@@ -265,13 +262,7 @@ def normalize_timestamps(
     df: DataFrame,
     table_name: str,
 ) -> DataFrame:
-    """
-    Timestamp را تا جای ممکن اصلاح می‌کند.
-
-    اگر Timestamp سفارش 1970 یا null باشد،
-    از Kafka timestamp استفاده می‌شود.
-    """
-
+    #standard timestamp
     df = (
         df
         .withColumn(
@@ -341,14 +332,70 @@ def normalize_timestamps(
 
     return df
 
+def build_cast_failure_rejection_rules(
+    table_name: str,
+) -> list:
+    # failed cast necessary field => reject
+
+    rules = []
+
+    required_fields = set(
+        REQUIRED_FIELDS[table_name]
+    )
+
+    for field_name in required_fields:
+        original_column_name = (
+            f"_before_cast_{field_name}"
+        )
+
+        rules.append(
+            F.when(
+                F.col(original_column_name).isNotNull()
+                & F.col(field_name).isNull(),
+                F.lit(
+                    f"{field_name}:cast_failed"
+                ),
+            )
+        )
+
+    return rules
+
+
+def build_cast_failure_warning_rules(
+    table_name: str,
+) -> list:
+    # failed cast of non-necessary field => warning
+    
+    rules = []
+
+    required_fields = set(
+        REQUIRED_FIELDS[table_name]
+    )
+
+    for field_name in TARGET_TYPES[table_name]:
+        if field_name in required_fields:
+            continue
+
+        original_column_name = (
+            f"_before_cast_{field_name}"
+        )
+
+        rules.append(
+            F.when(
+                F.col(original_column_name).isNotNull()
+                & F.col(field_name).isNull(),
+                F.lit(
+                    f"{field_name}:cast_failed"
+                ),
+            )
+        )
+
+    return rules
 
 def build_rejection_rules(
     table_name: str,
 ) -> list:
-    """
-    فقط خطاهای حیاتی که مانع استفاده از رکورد هستند.
-    """
-
+    #critical records missing will be rejected
     rules = []
 
     for field_name in REQUIRED_FIELDS[table_name]:
@@ -413,15 +460,19 @@ def build_rejection_rules(
             )
         )
 
+        rules.extend(
+        build_cast_failure_rejection_rules(
+            table_name
+        )
+    )
+
     return rules
 
 
 def build_warning_rules(
     table_name: str,
 ) -> list:
-    """
-    مشکلات غیرحیاتی؛ رکورد Reject نمی‌شود.
-    """
+    #warning for not critical missing values
 
     rules = []
 
@@ -476,6 +527,12 @@ def build_warning_rules(
             )
         )
 
+        rules.extend(
+        build_cast_failure_warning_rules(
+            table_name
+        )
+    )
+
     return rules
 
 
@@ -514,6 +571,10 @@ def build_quality_issues(
             .alias("repair_description"),
             F.col("_original_record")
             .alias("original_record"),
+            # comes from bronze, keeo the exact parq address
+            F.col("_source_file")
+            .cast("string")
+            .alias("_source_file"),
             F.col("_kafka_topic"),
             F.col("_kafka_partition"),
             F.col("_kafka_offset"),
@@ -530,7 +591,6 @@ def validate_transactional_data(
 ) -> ValidationResult:
     validate_table_name(table_name)
 
-    # قبل از هر Cast یا تغییر، رکورد اصلی حفظ می‌شود.
     df = df.withColumn(
         "_original_record",
         build_original_record(df),
@@ -573,6 +633,11 @@ def validate_transactional_data(
     rejected_df = validated_df.filter(
         F.size("validation_errors") > 0
     )
+    #removing internal coulmns made for better managment
+    before_cast_columns = [
+    f"_before_cast_{field_name}"
+    for field_name in TARGET_TYPES[table_name]
+    ]
 
     valid_df = (
         validated_df
@@ -581,8 +646,10 @@ def validate_transactional_data(
         )
         .drop(
             "validation_errors",
+            "validation_warnings",
             "_original_record",
             "_timestamp_repair_reason",
+            *before_cast_columns,
         )
     )
 
