@@ -21,7 +21,10 @@ def main():
         .config("spark.hadoop.fs.s3a.secret.key", "minioadmin") \
         .getOrCreate()
     
-    # Sample quality issues data (like what validation produces)
+    # Sample quality issues data using timestamp objects
+    from datetime import datetime
+    ts = datetime.now()
+    
     sample_data = [
         {
             "source_table": "categories",
@@ -35,9 +38,9 @@ def main():
             "_kafka_topic": "transactional.categories",
             "_kafka_partition": 0,
             "_kafka_offset": 12345,
-            "_kafka_timestamp": "2026-07-16 17:39:50",
-            "bronze_ingestion_timestamp": "2026-07-16 17:39:50",
-            "detected_at": "2026-07-16 17:39:50"
+            "_kafka_timestamp": ts,
+            "bronze_ingestion_timestamp": ts,
+            "detected_at": ts
         },
         {
             "source_table": "categories",
@@ -51,13 +54,12 @@ def main():
             "_kafka_topic": "transactional.categories",
             "_kafka_partition": 1,
             "_kafka_offset": 12346,
-            "_kafka_timestamp": "2026-07-16 17:40:00",
-            "bronze_ingestion_timestamp": "2026-07-16 17:40:00",
-            "detected_at": "2026-07-16 17:40:00"
+            "_kafka_timestamp": ts,
+            "bronze_ingestion_timestamp": ts,
+            "detected_at": ts
         }
     ]
     
-    # Create DataFrame with proper schema
     schema = StructType([
         StructField("source_table", StringType(), True),
         StructField("record_id", StringType(), True),
