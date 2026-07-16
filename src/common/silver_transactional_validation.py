@@ -68,7 +68,7 @@ EXPECTED_COLUMNS = {
 }
 
 
-# فقط فیلدهایی که بدون آن‌ها رکورد قابل استفاده نیست.
+# Only fields without which the record cannot be used.
 REQUIRED_FIELDS = {
     "categories": [
         "category_id",
@@ -114,7 +114,7 @@ RECORD_ID_FIELDS = {
 }
 
 
-# Castها مطابق نوع واقعی فایل‌های Parquet هستند.
+# Casts match the actual Parquet file types.
 TARGET_TYPES = {
     "categories": {
         "category_id": "string",
@@ -206,7 +206,13 @@ def validate_table_name(table_name: str) -> None:
 
 
 def build_original_record(df: DataFrame):
-    #transform to json
+    """
+    Converts the entire original record to JSON.
+
+    Binary columns such as _raw_value are Base64-encoded first
+    to prevent to_json from failing.
+    """
+
     json_columns = []
 
     for field in df.schema.fields:
@@ -228,7 +234,12 @@ def prepare_columns(
     df: DataFrame,
     table_name: str,
 ) -> DataFrame:
-    #casting an dturn into null, avoid failing whole job:
+    """
+    Adds missing optional columns as null and performs safe casting.
+
+    try_cast converts invalid values to null instead of failing the Spark job.
+    """
+
     expected_columns = EXPECTED_COLUMNS[table_name]
 
     for field_name in expected_columns:
@@ -238,16 +249,7 @@ def prepare_columns(
                 F.lit(None),
             )
 
-    # keep the original value before casting
     for field_name, target_type in TARGET_TYPES[table_name].items():
-        original_column_name = (
-            f"_before_cast_{field_name}"
-        )
-        df = df.withColumn(
-            original_column_name,
-            F.col(field_name),
-        )
-
         df = df.withColumn(
             field_name,
             F.expr(
@@ -262,7 +264,13 @@ def normalize_timestamps(
     df: DataFrame,
     table_name: str,
 ) -> DataFrame:
-    #standard timestamp
+    """
+    Repairs timestamps where possible.
+
+    If an order timestamp is null or from 1970,
+    it is replaced with the Kafka timestamp.
+    """
+
     df = (
         df
         .withColumn(
@@ -332,70 +340,14 @@ def normalize_timestamps(
 
     return df
 
-def build_cast_failure_rejection_rules(
-    table_name: str,
-) -> list:
-    # failed cast necessary field => reject
-
-    rules = []
-
-    required_fields = set(
-        REQUIRED_FIELDS[table_name]
-    )
-
-    for field_name in required_fields:
-        original_column_name = (
-            f"_before_cast_{field_name}"
-        )
-
-        rules.append(
-            F.when(
-                F.col(original_column_name).isNotNull()
-                & F.col(field_name).isNull(),
-                F.lit(
-                    f"{field_name}:cast_failed"
-                ),
-            )
-        )
-
-    return rules
-
-
-def build_cast_failure_warning_rules(
-    table_name: str,
-) -> list:
-    # failed cast of non-necessary field => warning
-    
-    rules = []
-
-    required_fields = set(
-        REQUIRED_FIELDS[table_name]
-    )
-
-    for field_name in TARGET_TYPES[table_name]:
-        if field_name in required_fields:
-            continue
-
-        original_column_name = (
-            f"_before_cast_{field_name}"
-        )
-
-        rules.append(
-            F.when(
-                F.col(original_column_name).isNotNull()
-                & F.col(field_name).isNull(),
-                F.lit(
-                    f"{field_name}:cast_failed"
-                ),
-            )
-        )
-
-    return rules
 
 def build_rejection_rules(
     table_name: str,
 ) -> list:
-    #critical records missing will be rejected
+    """
+    Critical errors that prevent the record from being used.
+    """
+
     rules = []
 
     for field_name in REQUIRED_FIELDS[table_name]:
@@ -460,19 +412,15 @@ def build_rejection_rules(
             )
         )
 
-        rules.extend(
-        build_cast_failure_rejection_rules(
-            table_name
-        )
-    )
-
     return rules
 
 
 def build_warning_rules(
     table_name: str,
 ) -> list:
-    #warning for not critical missing values
+    """
+    Non-critical issues; the record is not rejected.
+    """
 
     rules = []
 
@@ -527,12 +475,6 @@ def build_warning_rules(
             )
         )
 
-        rules.extend(
-        build_cast_failure_warning_rules(
-            table_name
-        )
-    )
-
     return rules
 
 
@@ -571,10 +513,6 @@ def build_quality_issues(
             .alias("repair_description"),
             F.col("_original_record")
             .alias("original_record"),
-            # comes from bronze, keeo the exact parq address
-            F.col("_source_file")
-            .cast("string")
-            .alias("_source_file"),
             F.col("_kafka_topic"),
             F.col("_kafka_partition"),
             F.col("_kafka_offset"),
@@ -591,6 +529,7 @@ def validate_transactional_data(
 ) -> ValidationResult:
     validate_table_name(table_name)
 
+    # Preserve original record before any casting or transformation
     df = df.withColumn(
         "_original_record",
         build_original_record(df),
@@ -633,11 +572,6 @@ def validate_transactional_data(
     rejected_df = validated_df.filter(
         F.size("validation_errors") > 0
     )
-    #removing internal coulmns made for better managment
-    before_cast_columns = [
-    f"_before_cast_{field_name}"
-    for field_name in TARGET_TYPES[table_name]
-    ]
 
     valid_df = (
         validated_df
@@ -646,10 +580,8 @@ def validate_transactional_data(
         )
         .drop(
             "validation_errors",
-            "validation_warnings",
             "_original_record",
             "_timestamp_repair_reason",
-            *before_cast_columns,
         )
     )
 
