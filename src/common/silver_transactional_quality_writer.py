@@ -160,9 +160,9 @@ def create_quality_table_if_not_exists(
 
 def write_transactional_quality_issues(
     quality_issues_df: DataFrame,
-    catalog_name: str | None = None,
-    namespace: str | None = None,
-    table_name: str | None = None,
+    catalog_name: Optional[str] = None,
+    namespace: Optional[str] = None,
+    table_name: Optional[str] = None,
 ) -> None:
     """
     Append transactional validation issues to Iceberg.
