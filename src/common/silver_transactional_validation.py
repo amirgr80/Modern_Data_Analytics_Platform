@@ -513,11 +513,6 @@ def build_quality_issues(
             .alias("repair_description"),
             F.col("_original_record")
             .alias("original_record"),
-            F.col("_kafka_topic"),
-            F.col("_kafka_partition"),
-            F.col("_kafka_offset"),
-            F.col("_kafka_timestamp"),
-            F.col("bronze_ingestion_timestamp"),
             F.current_timestamp().alias("detected_at"),
         )
     )
