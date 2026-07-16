@@ -1,9 +1,8 @@
 import logging
 import os
-
+from typing import List, Optional
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
-
 
 logger = logging.getLogger(__name__)
 
