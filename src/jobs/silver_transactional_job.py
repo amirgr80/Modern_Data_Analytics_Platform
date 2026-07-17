@@ -23,7 +23,7 @@ from common.silver_transactional_kimball import (
     build_all_kimball_tables,
 )
 from common.silver_transactional_iceberg_writer import (
-    write_kimball_tables,
+    SilverTransactionalIcebergWriter,
 )
 
 
@@ -49,11 +49,6 @@ def process_table(
     table_name: str,
     silver_bucket: str,
 ) -> DataFrame:
-    """
-    Run the existing read, validation and cleaning flow for one table.
-
-    The returned cleaned DataFrame is used later by the Kimball builder.
-    """
     logger.info("=" * 60)
     logger.info("Processing table: %s", table_name)
 
@@ -205,7 +200,6 @@ def main() -> None:
         logger.info("=" * 60)
         logger.info("Building Kimball dimensions and facts.")
 
-
         kimball_tables = build_all_kimball_tables(
             users_df=cleaned_tables.get('users'),
             categories_df=cleaned_tables.get('categories'),
@@ -217,25 +211,18 @@ def main() -> None:
             dim_date_end=dim_date_end,
         )
 
-        kimball_tables = build_all_kimball_tables(
-            spark=spark,
-            cleaned_tables=cleaned_tables,
-            dim_date_start=dim_date_start,
-            dim_date_end=dim_date_end,
-        )
-
         logger.info(
             "Writing Kimball tables to %s.%s",
             catalog,
             namespace,
         )
 
-        write_kimball_tables(
+        writer = SilverTransactionalIcebergWriter(
             spark=spark,
-            kimball_tables=kimball_tables,
             catalog=catalog,
             namespace=namespace,
         )
+        writer.write_all(kimball_tables)
 
         logger.info("=" * 60)
         logger.info(
