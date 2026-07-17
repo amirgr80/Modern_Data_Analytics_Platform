@@ -20,7 +20,7 @@ from common.silver_transactional_quality_writer import (
     write_transactional_quality_issues,
 )
 from common.silver_transactional_kimball import (
-    build_kimball_tables,
+    build_all_kimball_tables,
 )
 from common.silver_transactional_iceberg_writer import (
     write_kimball_tables,
@@ -205,7 +205,19 @@ def main() -> None:
         logger.info("=" * 60)
         logger.info("Building Kimball dimensions and facts.")
 
-        kimball_tables = build_kimball_tables(
+
+        kimball_tables = build_all_kimball_tables(
+            users_df=cleaned_tables.get('users'),
+            categories_df=cleaned_tables.get('categories'),
+            products_df=cleaned_tables.get('products'),
+            orders_df=cleaned_tables.get('orders'),
+            order_items_df=cleaned_tables.get('order_items'),
+            product_price_history_df=cleaned_tables.get('product_price_history'),
+            dim_date_start=dim_date_start,
+            dim_date_end=dim_date_end,
+        )
+
+        kimball_tables = build_all_kimball_tables(
             spark=spark,
             cleaned_tables=cleaned_tables,
             dim_date_start=dim_date_start,
