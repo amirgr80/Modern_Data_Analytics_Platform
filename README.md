@@ -1,8 +1,8 @@
 # Modern Data Analytics Platform
 
-A Kafka-to-Lakehouse data platform built on Apache Spark, MinIO, and a Confluent-compatible Schema Registry, orchestrated locally and on VPS via Docker Compose.
+A Kafka-to-Lakehouse data platform built on Apache Spark, MinIO, Apache Iceberg, and a Confluent-compatible Schema Registry, orchestrated locally and on VPS via Docker Compose.
 
-The platform follows a Medallion (Bronze / Silver / Gold) architecture. **This repository currently implements the Bronze layer.** Silver, Gold, and orchestration are provisioned at the infrastructure level but not yet implemented in code.
+The platform follows a Medallion (Bronze / Silver / Gold) architecture. **This repository currently implements the Bronze and Silver layers.** Gold is provisioned at the infrastructure level (ClickHouse, Metabase) but not yet implemented in code.
 
 ---
 
@@ -10,17 +10,29 @@ The platform follows a Medallion (Bronze / Silver / Gold) architecture. **This r
 
 1. [Project Overview](#1-project-overview)
 2. [Architecture Overview](#2-architecture-overview)
-3. [Bronze Layer](#3-bronze-layer)
-4. [Transactional Pipeline](#4-transactional-pipeline)
-5. [Behavioral Pipeline](#5-behavioral-pipeline)
-6. [Component Responsibilities](#6-component-responsibilities)
-7. [Repository Structure](#7-repository-structure)
-8. [Technology Stack](#8-technology-stack)
-9. [Configuration Management](#9-configuration-management)
-10. [Development Setup](#10-development-setup)
-11. [Current Implementation Status](#11-current-implementation-status)
-12. [Git Workflow](#12-git-workflow)
-13. [Engineering Notes](#13-engineering-notes)
+3. [Data Flow](#3-data-flow)
+4. [Bronze Layer](#4-bronze-layer)
+   - [4.1 Transactional Pipeline](#41-bronze-transactional-pipeline)
+   - [4.2 Behavioral Pipeline](#42-bronze-behavioral-pipeline)
+5. [Silver Layer](#5-silver-layer)
+   - [5.1 Behavioral Pipeline](#51-silver-behavioral-pipeline)
+   - [5.2 Transactional Pipeline](#52-silver-transactional-pipeline)
+6. [Silver Processing Workflow](#6-silver-processing-workflow)
+7. [Input and Output Contracts](#7-input-and-output-contracts)
+8. [Data Quality and Validation](#8-data-quality-and-validation)
+9. [File and Module Responsibilities](#9-file-and-module-responsibilities)
+10. [Repository Structure](#10-repository-structure)
+11. [Technology Stack](#11-technology-stack)
+12. [Configuration Management](#12-configuration-management)
+13. [Installation and Development Setup](#13-installation-and-development-setup)
+14. [Running the Pipeline](#14-running-the-pipeline)
+15. [Logging and Error Handling](#15-logging-and-error-handling)
+16. [Testing](#16-testing)
+17. [Design Decisions](#17-design-decisions)
+18. [Current Implementation Status](#18-current-implementation-status)
+19. [Roadmap](#19-roadmap)
+20. [Git Workflow](#20-git-workflow)
+21. [Engineering Notes](#21-engineering-notes)
 
 ---
 
@@ -30,23 +42,36 @@ The platform follows a Medallion (Bronze / Silver / Gold) architecture. **This r
 
 E-commerce systems produce two structurally different data streams: **transactional data** (orders, users, products, pricing) from operational systems, and **behavioral data** (clickstream, cart activity, search, page views) from user interaction tracking. Both need to land in a lake reliably, with schema enforcement and full lineage, before they can be cleaned, modeled, and served for analytics.
 
-This platform ingests both streams from Kafka into a MinIO-backed Bronze layer using Apache Spark Structured Streaming, as the ingestion foundation for a downstream Silver (Iceberg, Kimball modeling) and Gold (ClickHouse OLAP) layer.
+This platform ingests both streams from Kafka into a MinIO-backed Bronze layer using Apache Spark Structured Streaming, then refines them in a Silver layer built on Apache Iceberg, as the foundation for a future Gold (ClickHouse OLAP) layer.
+
+### Why a Medallion Architecture
+
+Each layer has one job, and the boundary between them is what makes the platform debuggable:
+
+- **Bronze** preserves what actually arrived. It never deduplicates, joins, or models. If a downstream layer has a bug, Bronze is still the unmodified record of the source, and the layer can simply be rebuilt from it.
+- **Silver** is where correctness is enforced: validation, cleaning, deduplication, and dimensional modeling. It is the first layer that is safe to query for analysis.
+- **Gold** will denormalize Silver into query-optimized structures for BI.
+
+Separating them means a schema change, a bad deploy, or a data-quality incident is contained to one layer and recoverable from the layer beneath it.
 
 ### Current Scope
 
-- Two independent Bronze ingestion pipelines: **Transactional** and **Behavioral**.
-- Local/VPS infrastructure for the full target stack (Spark, MinIO, Airflow, Iceberg REST catalog, ClickHouse, Metabase) via Docker Compose.
+- Two independent **Bronze** ingestion pipelines: Transactional and Behavioral.
+- Two **Silver** pipelines with different maturity:
+  - **Silver Behavioral** — complete: Iceberg star schema over MinIO via the Lakekeeper REST catalog, idempotent MERGE writes, quarantine, data-quality tables, and an Airflow DAG.
+  - **Silver Transactional** — partial: validated and cleansed Parquet output. No Iceberg tables and no Kimball model yet.
+- Local/VPS infrastructure for the full target stack via Docker Compose.
 - Kafka and the Schema Registry are treated as externally managed dependencies, not started by this repository.
 
 ### Current Maturity Level
 
-Early-stage, active development. The Bronze layer's ingestion, transformation, and write logic is implemented per pipeline. Orchestration (Airflow DAGs), Silver modeling, Gold loading, and BI dashboards are not yet implemented — see [Section 11](#11-current-implementation-status) for a precise breakdown, and [Section 13](#13-engineering-notes) for known wiring issues that should be resolved before running the jobs end-to-end.
+Active development. Bronze ingestion is implemented for both pipelines. The Silver Behavioral pipeline is production-shaped and orchestrated. The Silver Transactional pipeline cleanses data but does not yet produce dimensional tables. Gold loading and BI dashboards are not implemented — see [Section 18](#18-current-implementation-status) for a precise breakdown and [Section 21](#21-engineering-notes) for known issues.
 
 ---
 
 ## 2. Architecture Overview
 
-Kafka and the Schema Registry are external systems the platform connects to but does not provision. Everything from Spark onward is provisioned by this repository's Docker Compose stack. Silver, Gold, orchestration, and visualization services are already defined in `docker-compose.yml` (infrastructure-first), but have no corresponding pipeline code yet.
+Kafka and the Schema Registry are external systems the platform connects to but does not provision. Everything from Spark onward is provisioned by this repository's Docker Compose stack.
 
 ```mermaid
 flowchart LR
@@ -60,51 +85,95 @@ flowchart LR
         MINIOB[("MinIO<br/>bronze/ data")]
     end
 
-    subgraph SILVER[Silver Layer - Planned]
+    subgraph SILVER[Silver Layer - Implemented]
         AIRFLOW["Apache Airflow<br/>batch orchestration"]
-        ICEBERG[("Apache Iceberg<br/>warehouse/ bucket")]
+        SPARKB["Apache Spark<br/>batch ETL"]
+        ICEBERG[("Apache Iceberg<br/>via Lakekeeper REST<br/>warehouse/ bucket")]
+        MINIOS[("MinIO<br/>silver/ Parquet")]
     end
 
     subgraph GOLD[Gold Layer - Planned]
         CH[("ClickHouse<br/>One Big Table")]
-    end
-
-    subgraph VIZ[Visualization - Planned]
         MB["Metabase dashboards"]
     end
 
     KAFKA --> SPARK
     SR -.->|schema lookup| SPARK
     SPARK --> MINIOB
-    MINIOB -.-> AIRFLOW
-    AIRFLOW -.-> ICEBERG
+    MINIOB --> AIRFLOW
+    AIRFLOW --> SPARKB
+    SPARKB --> ICEBERG
+    SPARKB --> MINIOS
     ICEBERG -.-> CH
     CH -.-> MB
 
     classDef external fill:#1f3a52,stroke:#2f5d82,color:#ffffff
     classDef bronzeNode fill:#4a3018,stroke:#8a5a2b,color:#ffffff
-    classDef silverNode fill:#3a3d42,stroke:#8b8f97,color:#ffffff,stroke-dasharray: 4 3
+    classDef silverNode fill:#3a3d42,stroke:#8b8f97,color:#ffffff
     classDef goldNode fill:#4a3f18,stroke:#a8862c,color:#ffffff,stroke-dasharray: 4 3
-    classDef purpleNode fill:#3a2a4a,stroke:#6f4c9e,color:#ffffff,stroke-dasharray: 4 3
 
     class KAFKA,SR external
     class SPARK,MINIOB bronzeNode
-    class AIRFLOW,ICEBERG silverNode
-    class CH goldNode
-    class MB purpleNode
+    class AIRFLOW,SPARKB,ICEBERG,MINIOS silverNode
+    class CH,MB goldNode
 
     style EXT fill:#16232f,stroke:#2f5d82,color:#dbe8f2
     style BRONZE fill:#2b1f16,stroke:#8a5a2b,color:#f0ded0
     style SILVER fill:#24262a,stroke:#8b8f97,color:#e4e6ea
     style GOLD fill:#2b2614,stroke:#a8862c,color:#f0e6c0
-    style VIZ fill:#211a2b,stroke:#6f4c9e,color:#e4dbf2
 ```
 
-Solid nodes/edges are implemented today. Dashed nodes/edges represent infrastructure that is already provisioned in `docker-compose.yml` (Airflow, Iceberg REST catalog, ClickHouse, Metabase) but has no pipeline code writing to or reading from it yet.
+Solid nodes and edges are implemented today. Dashed edges represent infrastructure that is provisioned in `docker-compose.yml` (ClickHouse, Metabase) but has no pipeline code reading from or writing to it yet.
+
+**A note on the Iceberg catalog.** The Compose stack defines *two* Iceberg REST catalog services: `iceberg-rest` (tabulario 1.6.0) and `lakekeeper`. The pipeline environment (`x-pipeline-env`, `x-airflow-common-env`) points at **Lakekeeper**, which is the catalog the Silver Behavioral pipeline actually uses. See [Section 21](#21-engineering-notes).
 
 ---
 
-## 3. Bronze Layer
+## 3. Data Flow
+
+```text
+Kafka topics (external)
+        |
+        v
+Bronze Layer  --  Spark Structured Streaming, append-only Parquet
+        |
+        +--> s3a://bronze/transactional/<table>/<yyyyMMdd>/
+        |
+        +--> s3a://bronze/behavioral/events/year=/month=/day=/
+                 |
+                 v
+Silver Layer  --  Spark batch ETL, orchestrated by Airflow
+        |
+        +--> Iceberg star schema      (Behavioral, via Lakekeeper)
+        +--> s3a://silver/transactional/<table>/   (Transactional, Parquet)
+                 |
+                 v
+Gold Layer  --  PLANNED (ClickHouse One Big Table -> Metabase)
+```
+
+End to end, for the Behavioral stream:
+
+```mermaid
+flowchart TB
+    K["Kafka: behavioral.events<br/>Confluent Avro"] --> BR["Bronze streaming job<br/>decode, standardize, validate"]
+    BR --> BP[("s3a://bronze/behavioral/events<br/>year=/month=/day=")]
+    BP --> SR["Silver bronze reader<br/>one day partition + lineage"]
+    SR --> SV["Validation<br/>valid / warning / rejected"]
+    SV -->|rejected| Q[("behavioral_events_quarantine")]
+    SV -->|all issues| DQ[("behavioral_data_quality")]
+    SV -->|valid + warning| CL["Cleaning<br/>normalize, dedupe on event_key"]
+    CL --> TR["Transform<br/>Kimball star schema"]
+    TR --> DIMS[("dim_device<br/>dim_event_type<br/>dim_session<br/>dim_date")]
+    TR --> FACT[("fact_behavioral_events")]
+    FACT --> AS["DQ assertions<br/>fail the job on breach"]
+    AS --> RUNS[("behavioral_pipeline_runs<br/>audit + metrics")]
+```
+
+**Key point:** records flagged with *warnings* are not dropped. They flow into the fact table with their flags attached as `dq_flags`, and are also recorded in the quality table. Only records with *errors* are diverted to quarantine.
+
+---
+
+## 4. Bronze Layer
 
 ### Purpose
 
@@ -131,15 +200,19 @@ flowchart LR
     B -.->|checkpoint offsets| F[("MinIO<br/>checkpoints/...")]
 ```
 
+### Execution
+
+Streaming jobs, run with `spark-submit` inside `spark-master`. See [Section 14](#14-running-the-pipeline).
+
 ---
 
-## 4. Transactional Pipeline
+### 4.1 Bronze Transactional Pipeline
 
-### Purpose
+#### Purpose
 
 Ingest six core e-commerce entities from Kafka, one topic per table, using statically defined schemas.
 
-### Components
+#### Components
 
 | Module | File |
 |---|---|
@@ -147,10 +220,11 @@ Ingest six core e-commerce entities from Kafka, one topic per table, using stati
 | Transform | `src/common/bronze_transactional_transform.py` |
 | Spark Session | `src/common/bronze_transactional_spark_session.py` |
 | MinIO Writer | `src/common/bronze_transactional_minio_writer.py` |
+| Avro helpers | `src/common/bronze_transactional_avro.py` |
 | Schemas | `src/schemas/bronze_transactional_schemas.py` |
 | Job Entrypoint | `src/jobs/bronze_transactional_job.py` |
 
-### Tables and Partition Source
+#### Tables and Partition Source
 
 Each table is read from its own Kafka topic and parsed against a static PySpark `StructType`. Because not every topic carries a business timestamp, the partition date is derived per table:
 
@@ -165,7 +239,7 @@ Each table is read from its own Kafka topic and parsed against a static PySpark 
 
 "Nullable union fields" are Avro-style `{"string": "value"}` wrapper objects flattened into plain nullable string columns.
 
-### Flow
+#### Flow
 
 ```mermaid
 flowchart TB
@@ -188,13 +262,13 @@ One streaming query is started per table; the job awaits termination of any quer
 
 ---
 
-## 5. Behavioral Pipeline
+### 4.2 Bronze Behavioral Pipeline
 
-### Purpose
+#### Purpose
 
 Ingest a single clickstream/behavioral events topic (`behavioral.events`) encoded in Confluent Avro wire format, with the schema resolved dynamically from a Schema Registry rather than hardcoded.
 
-### Components
+#### Components
 
 | Module | File |
 |---|---|
@@ -206,13 +280,14 @@ Ingest a single clickstream/behavioral events topic (`behavioral.events`) encode
 | Schema Metadata | `src/schemas/bronze_behavioral_schemas.py` |
 | Job Entrypoint | `src/jobs/bronze_behavioral_job.py` |
 
-### Design Highlights
+#### Design Highlights
 
 - **Confluent wire-format decoding**: each Kafka message is decoded by stripping the magic byte and 4-byte schema id before Avro-decoding the payload (`PERMISSIVE` mode).
 - **Quarantine, not drop**: records that fail to decode, or whose wire-format schema id doesn't match the schema fetched from the registry, are **kept** with `decode_success`, `schema_id_matches`, `decode_error`, `validation_errors`, and `is_valid` columns populated, so Silver can route them to quarantine instead of the stream failing.
 - **Partition fallback**: `year`/`month`/`day` are derived from `event_timestamp` when it parses correctly, falling back to the Kafka broker's own timestamp so records never land in a null partition.
+- **Derived `event_id`**: the transform overwrites the payload's `event_id` with `sha2(kafka_topic || kafka_partition || kafka_offset, 256)`. This makes `event_id` unique and non-null by construction, which Silver relies on — but it also means the producer's original `event_id` is not preserved. See [Section 21](#21-engineering-notes).
 
-### Flow
+#### Flow
 
 ```mermaid
 flowchart TB
@@ -223,107 +298,446 @@ flowchart TB
     WRITER --> OUT[("s3a://.../bronze/behavioral/events/year=/month=/day=")]
 ```
 
-> The `read_behavioral_kafka_stream` function is referenced by the job entrypoint but is not yet implemented in `bronze_behavioral_kafka_reader.py` — see [Section 13](#13-engineering-notes).
+---
+
+## 5. Silver Layer
+
+### Purpose
+
+Turn the raw Bronze record into data that is safe to analyze. Silver is where the platform decides what is trustworthy, makes it uniform, and models it dimensionally.
+
+### Why Silver Exists Separately From Bronze
+
+Bronze answers *"what arrived?"*. Silver answers *"what is true?"*. Keeping them apart means:
+
+- Rejecting a record is reversible. Quarantine and quality decisions live in Silver, so a rule change is a Silver re-run over unchanged Bronze data — no re-ingestion from Kafka.
+- Bronze can stay a fast, append-only stream with no business logic in the hot path.
+- Silver can be batch, idempotent, and re-runnable, which is a fundamentally different execution model from streaming.
+
+### Problems Silver Solves
+
+| Problem in Bronze | Silver's answer |
+|---|---|
+| Duplicate events from streaming retries and backfills | Deduplication on a deterministic `event_key` |
+| Mixed casing, blank strings, `"N/A"`, `"unknown"` placeholders | Normalization and null-like collapsing |
+| Broken records mixed in with good ones | Three-way split: valid / warning / rejected |
+| No dimensional structure; wide raw rows | Kimball star schema (facts + dimensions) |
+| No way to answer "how bad is the data?" | Dedicated quality and audit tables |
+| Reruns would double-count | Idempotent MERGE on natural keys |
+
+### Two Pipelines, Different Maturity
+
+The Silver layer contains **two independent pipelines owned by different teams**. They are structurally isolated: no shared module, no shared Spark session, no cross-imports. This is deliberate — see [Section 17](#17-design-decisions).
+
+| | Silver Behavioral | Silver Transactional |
+|---|---|---|
+| Status | Complete | Partial |
+| Output format | Apache Iceberg | Parquet |
+| Catalog | Lakekeeper REST | None |
+| Dimensional model | Yes (star schema) | Not yet |
+| Orchestrated | Yes (Airflow DAG) | No DAG yet |
+| Idempotent | Yes (MERGE) | No (`overwrite`) |
+| Quality tables | Yes | Attempted; see [Section 21](#21-engineering-notes) |
 
 ---
 
-## 6. Component Responsibilities
+### 5.1 Silver Behavioral Pipeline
 
-**Kafka Readers** open a Structured Streaming source against one or more topics and hand back a raw or parsed DataFrame. The Transactional reader (`read_kafka_topic` / `read_and_parse_kafka_topic`) is fully implemented: configurable bootstrap servers, configurable starting offsets (default `earliest`), `failOnDataLoss=false`, and retains Kafka metadata columns (`_kafka_topic`, `_kafka_partition`, `_kafka_offset`, `_kafka_timestamp`).
+Reads one day of Bronze behavioral Parquet and produces an Iceberg star schema via the Lakekeeper REST catalog.
 
-**Spark Jobs** (`src/jobs/`) are the orchestration entrypoints. Each wires reader → transform → writer for its pipeline, starts the streaming quer(y/ies), and awaits termination. The Transactional job starts one query per table and stops all of them cleanly on shutdown or failure; the Behavioral job resolves the Avro schema from the registry before starting its single query.
+#### Module Structure and Why It Exists
 
-**Transform Layer** applies the Bronze-appropriate minimum: schema parsing/decoding, targeted field standardization, lineage metadata, and partition-column computation. It does not deduplicate, join, or model — see [Section 3](#3-bronze-layer).
+The Behavioral pipeline is split into nine single-responsibility modules. The split is not decoration — each module exists because it owns a decision that must be testable and changeable in isolation:
 
-**Registry Client** (`src/common/registry_client.py`) fetches the latest Avro schema, and optionally its numeric schema id, for a subject from a Confluent-compatible Schema Registry over HTTP. It is written generically (subject-parameterized, no Behavioral-specific naming) so it can be reused by future Avro-backed pipelines.
+| Module | Owns | Why separate |
+|---|---|---|
+| `silver_behavioral_config.py` | Env vars, package list, table names, paths | Imports no PySpark, so the Airflow DAG can import it at parse time. This is what guarantees the DAG and the job use **one** Spark package list rather than two hand-copied ones that drift. |
+| `silver_behavioral_spark_session.py` | Session + Iceberg/S3A configuration | Keeps catalog wiring out of business logic |
+| `silver_behavioral_schema.py` | All Iceberg DDL + additive schema evolution | DDL is behavioral-owned; keeping it out of any shared module means the other team can change catalog config without touching table definitions |
+| `silver_behavioral_bronze_reader.py` | Read + partition prune + lineage | A pure read. No validation, no renaming |
+| `silver_behavioral_validation.py` | valid / warning / rejected split, `event_key` | The one place that decides what is trustworthy |
+| `silver_behavioral_cleaning.py` | Normalization, dedupe | Cleaning must never override a validation decision |
+| `silver_behavioral_transform.py` | Kimball modeling only | Business logic with no I/O — trivially unit-testable |
+| `silver_behavioral_iceberg_writer.py` | Merge strategies | One generic MERGE is unsafe; strategy per table |
+| `silver_behavioral_quality_writer.py` | Quality, quarantine, audit writes | All three destinations, all idempotent |
 
-**MinIO Writers** persist each micro-batch as Snappy-compressed Parquet via `foreachBatch`, with a checkpoint location for streaming fault tolerance. The Behavioral writer additionally coalesces each micro-batch to a small, fixed number of output files and caps file size via `maxRecordsPerFile`, to counter small-file proliferation at low throughput — both tunable via environment variables.
+#### The `event_key` Contract
 
-**Schema Definitions** take two different, deliberate forms: Transactional schemas are static PySpark `StructType`s checked into `src/schemas/bronze_transactional_schemas.py`, since those topics are internally defined. Behavioral schema metadata (`src/schemas/bronze_behavioral_schemas.py`) explicitly does **not** contain a copy of the Avro schema — the module's own docstring states the Schema Registry is the single source of truth, and only column-contract constants live in the repository.
+The fact grain is one row per unique behavioral event, keyed on `event_key`, derived in this order:
+
+1. `event_id`, when present and non-blank.
+2. Otherwise `sha256(kafka_topic || kafka_partition || kafka_offset)`.
+
+The topic is included deliberately: a Kafka offset is only unique *within* a topic partition, so partition+offset alone would collide as soon as a second behavioral topic is ingested.
+
+Records with neither a usable `event_id` nor usable Kafka coordinates are **rejected**, not silently assigned a key.
+
+#### Merge Strategies
+
+Different tables need different write semantics. Using `WHEN MATCHED THEN UPDATE SET *` everywhere is actively harmful: `first_seen_at` in a dimension is computed as the *current batch's* minimum, so a blanket overwrite would destroy the true first-sighting on every run.
+
+| Strategy | Used by | Behavior |
+|---|---|---|
+| `FACT_DEDUPLICATE_INSERT` | `fact_behavioral_events` | Insert-only on `event_key`. Events are immutable; reruns are no-ops |
+| `UPSERT_PRESERVE_FIRST_SEEN` | `dim_device`, `dim_event_type`, `dim_session`, `behavioral_data_quality` | `first_seen := least(stored, incoming)`, `last_seen := greatest(stored, incoming)` |
+| `INSERT_ONLY` | `dim_date`, `behavioral_events_quarantine` | Insert new keys only; never rewrite |
+| `UPSERT_ALL` | `behavioral_pipeline_runs` | Full overwrite of the matched run row |
+| `SCD_TYPE_2` | — | Declared but **not implemented**; raises `NotImplementedError`. No Behavioral dimension currently requires history tracking |
+
+#### Idempotency
+
+Every write is a MERGE on a deterministic key. Re-running the same partition, an Airflow retry, and a backfill all converge to the same result:
+
+- `fact_behavioral_events` — insert-only on `event_key`
+- `dim_*` — upsert on the natural key, preserving first-seen
+- `behavioral_events_quarantine` — insert-only on `event_key`
+- `behavioral_data_quality` — upsert on `quality_key`, a deterministic hash of `(source_table, event_key, issue_type, error_code, event_date)`
+- `behavioral_pipeline_runs` — upsert on `pipeline_run_id`, which is deterministic per processing date (`silver_behavioral_etl::YYYY-MM-DD`)
+
+#### Outputs
+
+| Table | Namespace | Grain |
+|---|---|---|
+| `fact_behavioral_events` | `silver` | One behavioral event |
+| `dim_session` | `silver` | One session |
+| `dim_device` | `silver` | One device type |
+| `dim_event_type` | `silver` | One event type + category |
+| `dim_date` | `silver` | One calendar day (shared conformed dimension) |
+| `behavioral_events_quarantine` | `silver` | One rejected event |
+| `behavioral_data_quality` | `silver_quality` | One (record, issue) pair |
+| `behavioral_pipeline_runs` | `silver_quality` | One pipeline run |
 
 ---
 
-## 7. Repository Structure
+### 5.2 Silver Transactional Pipeline
 
-```
+Reads Bronze transactional Parquet per table, validates, cleans, and writes cleansed Parquet.
+
+#### What is implemented
+
+- `silver_transactional_bronze_reader.py` — reads one table's Bronze Parquet with `_source_file` lineage.
+- `silver_transactional_validation.py` — `ValidationResult(valid_df, rejected_df, quality_issues_df)`; per-table required-field, type, and range rules; timestamp repair.
+- `silver_transactional_cleaning.py` — trimming, null-like collapsing, type casting, exact-duplicate removal on the natural record id.
+- `silver_transactional_quality_writer.py` — writes quality issues to an Iceberg table.
+- `configs/spark/silver_transactional_config.py` — supported tables and Bronze column contracts.
+- `src/jobs/silver_transactional_job.py` — loops the six tables: read → validate → write quality issues → clean → write Parquet.
+
+#### What is not implemented
+
+- **No Iceberg output.** The job writes `mode('overwrite')` Parquet to `s3a://silver/transactional/<table>/`.
+- **No Kimball model.** There is no `dim_user`, `dim_product`, `fact_order`, or SCD Type 2 yet. This is the largest remaining gap in the Silver layer.
+- **No Airflow DAG.** The job is run manually.
+- **Not idempotent by design** — `overwrite` replaces the table on each run. This is safe to re-run but cannot process incrementally.
+- `silver_transactional_spark_session.py` exists and configures Iceberg, but the job does not import it; it builds its own plain Spark session instead.
+
+See [Section 21](#21-engineering-notes) for issues in this pipeline that should be resolved before it is relied on.
+
+---
+
+## 6. Silver Processing Workflow
+
+The steps below are the actual sequence in `src/jobs/silver_behavioral_job.py`.
+
+1. **Create the Spark session** and validate runtime configuration (fails fast if MinIO credentials or URLs are missing).
+2. **Ensure namespaces and tables** — `CREATE NAMESPACE / TABLE IF NOT EXISTS`, then additive `ALTER TABLE ADD COLUMNS` for any column missing from an already-deployed table.
+3. **Seed `dim_date`** (2023-01-01 → 2030-12-31), INSERT-only so it is safe if another pipeline seeds the same conformed dimension.
+4. **Read the Bronze partition** for the processing date, attaching `bronze_file_path` lineage. An empty partition ends the run as `SUCCESS_EMPTY` — not a failure.
+5. **Validate** — derive `event_key`, carry Bronze's own errors forward with a `bronze:` prefix, apply Silver error and warning rules, split into valid / warning / rejected.
+6. **Quarantine** rejected records (MERGE, insert-only).
+7. **Write quality findings** for every error and warning (MERGE on `quality_key`).
+8. **Clean** the processable records (valid + warning) and deduplicate on `event_key`.
+9. **Merge lookup dimensions** — `dim_device`, `dim_event_type`, preserving `first_seen_at`.
+10. **Merge the fact table** — insert-only on `event_key`.
+11. **Recompute `dim_session`** from the fact table for touched sessions only, then merge.
+12. **Run data-quality assertions** against the written partition. Any breach raises and fails the task.
+13. **Record the run** in `behavioral_pipeline_runs` with counts and status.
+14. **Stop the Spark session** in a `finally` block.
+
+On failure, the run is recorded as `FAILED` with the error message, and the original exception is re-raised so `spark-submit` exits non-zero and Airflow marks the task failed.
+
+---
+
+## 7. Input and Output Contracts
+
+### Bronze Behavioral output = Silver Behavioral input
+
+Selected columns (the full Bronze schema is wider). Types are as written to Parquet.
+
+| Column | Type | Description | Required by Silver |
+|---|---|---|---|
+| `event_id` | string | sha256 of topic+partition+offset (see [Section 4.2](#42-bronze-behavioral-pipeline)) | Preferred key source |
+| `user_id` | string | User identifier; null for anonymous traffic | No (warning if absent) |
+| `session_id` | string | Session identifier | Yes |
+| `event_type` | string | e.g. `page_view`, `add_to_cart`, `search_product` | Yes |
+| `event_timestamp` | timestamp | Parsed event time | Yes |
+| `device_type` | string | Raw device string | No (warning if absent/unknown) |
+| `ip_address` | string | Client IP | No (warning if malformed) |
+| `utm_source` | string | Acquisition source | No (warning if absent) |
+| `timestamp` | string | Raw source timestamp string | No |
+| `kafka_topic` | string | Lineage; key fallback component | Yes (reader fails if absent) |
+| `kafka_partition` | int | Lineage; key fallback component | Yes |
+| `kafka_offset` | bigint | Lineage; key fallback component | Yes |
+| `kafka_timestamp` | timestamp | Broker timestamp | Yes |
+| `bronze_ingestion_timestamp` | timestamp | Bronze write time | Yes |
+| `is_valid` | boolean | Bronze validation verdict | No |
+| `validation_errors` | array\<string\> | Bronze error codes | No |
+| `raw_value` | binary | Original Avro payload | No |
+| `year`, `month`, `day` | int | Partition columns | Yes |
+
+The Silver Bronze reader **fails the job** if any lineage column is missing — records that cannot be traced back to their Kafka message are not acceptable input.
+
+### Silver Behavioral output: `fact_behavioral_events`
+
+34 columns. Key groups:
+
+| Column | Type | Description |
+|---|---|---|
+| `event_key` | string | Grain / merge key |
+| `event_id` | string | Natural source id, preserved |
+| `date_key` | int | `yyyyMMdd`, joins `dim_date` |
+| `user_id` | string | **Natural key** — not a surrogate. See [Section 17](#17-design-decisions) |
+| `session_id`, `device`, `event_type` | string | Natural dimension keys |
+| `event_timestamp` | timestamp | Fact partition column (`days(event_timestamp)`) |
+| `ip_address`, `utm_source` | string | Source attributes |
+| `quantity`, `cart_value`, `duration_sec`, `rating`, `http_status`, `results_count`, `clicked_position`, `text_length`, `cart_total_items` | int / double | Measures |
+| `cart_items` | array\<struct\> | Cart contents |
+| `dq_flags` | array\<string\> | Warning flags carried from validation |
+| `kafka_topic`, `kafka_partition`, `kafka_offset`, `kafka_timestamp` | — | Lineage only; not keys |
+| `bronze_file_path`, `bronze_ingestion_timestamp`, `processing_date`, `pipeline_run_id`, `silver_ingestion_timestamp` | — | Lineage / audit |
+
+### Silver Transactional output
+
+Cleansed Parquet at `s3a://silver/transactional/<table>/`, one directory per table, written with `mode('overwrite')`. The schema is the Bronze schema after cleaning; it is **not** a modeled star schema and is not registered in any catalog.
+
+---
+
+## 8. Data Quality and Validation
+
+### Bronze-level
+
+The Behavioral transform attaches `decode_success`, `schema_id_matches`, `decode_error`, `validation_errors`, and `is_valid`. Nothing is dropped.
+
+### Silver Behavioral: three severities
+
+| Severity | Meaning | Destination |
+|---|---|---|
+| **Error** | Cannot be modeled | Quarantine. Excluded from the fact |
+| **Warning** | Usable but suspicious | **Kept**, flows into the fact with `dq_flags` |
+| **Clean** | No findings | Fact |
+
+Both errors and warnings are written to `behavioral_data_quality`.
+
+#### Error rules (reject)
+
+- No reliable unique key (`event_key` cannot be derived)
+- Missing `session_id`, `event_type`, or `event_timestamp`
+- Unparseable source timestamp
+- Avro decode failure (`decode_success = false`)
+- Any Bronze error, carried forward with a `bronze:` prefix
+
+#### Warning rules (keep and flag)
+
+- `user_id:missing_anonymous_user` — anonymous traffic is expected, not broken
+- `utm_source:missing`, `device_type:missing`, `device_type:unknown_value`
+- `ip_address:invalid_format` — the raw value is **retained**, so the flag is actionable
+- Business anomalies: negative `cart_value`, non-positive `quantity`, negative `duration_sec` / `results_count` / `clicked_position` / `text_length`, `rating` outside 1–5, `http_status` outside 100–599
+
+Bronze treats a missing `user_id` or `device_type` as fatal; Silver **downgrades both to warnings**, because rejecting anonymous traffic would understate every funnel metric.
+
+### Cleaning rules
+
+- **Identity fields** (`event_key`, `event_id`, `session_id`, `event_type`, `device`) — trimmed only, never collapsed to null. Collapsing `"unknown"` to null here would void a record validation just approved, and a null key can never match a MERGE `ON` clause.
+- **Descriptive fields** — trimmed, and `""` / `null` / `none` / `n/a` / `na` / `unknown` / `-` collapsed to null.
+- **Case** — `event_type`, `device`, `payment_type`, `shipping_method`, `fulfillment_speed`, `utm_source` lowercased.
+- **Types** — `try_cast` to the DDL type, yielding null rather than failing the job.
+- **Deduplication** — `row_number()` over `event_key` ordered by `(bronze_ingestion_timestamp, kafka_offset)`, keeping the earliest copy. Deterministic across runs, unlike `dropDuplicates`.
+
+### Post-write assertions
+
+After the fact MERGE, the job asserts against the written partition:
+
+- No null `event_key`
+- `event_key` unique within the partition
+- No null `date_key`
+- Fact row count equals the clean event count
+
+Any breach raises `SilverBehavioralError` and fails the task.
+
+### Silver Transactional
+
+`validate_transactional_data` returns `ValidationResult(valid_df, rejected_df, quality_issues_df)` with per-table rules and timestamp repair. Rejected records are excluded from the cleaned output. See [Section 21](#21-engineering-notes) regarding quality-issue persistence.
+
+---
+
+## 9. File and Module Responsibilities
+
+### Bronze
+
+| File or Module | Layer | Responsibility | Input | Output |
+|---|---|---|---|---|
+| `src/jobs/bronze_transactional_job.py` | Bronze | Entrypoint; one streaming query per table | Kafka topics | Streaming queries |
+| `src/jobs/bronze_behavioral_job.py` | Bronze | Entrypoint; resolves Avro schema, starts one query | `behavioral.events` | Streaming query |
+| `src/common/bronze_transactional_kafka_reader.py` | Bronze | Structured Streaming source; retains Kafka metadata | Topic name, schema | Parsed DataFrame |
+| `src/common/bronze_behavioral_kafka_reader.py` | Bronze | Structured Streaming source for the events topic | Topic name | Raw DataFrame |
+| `src/common/bronze_transactional_transform.py` | Bronze | Flatten unions, standardize dates, add metadata | Raw DataFrame | Bronze DataFrame |
+| `src/common/bronze_behavioral_transform.py` | Bronze | Avro decode, standardize, validate, partition | Raw DataFrame | Bronze DataFrame |
+| `src/common/bronze_transactional_avro.py` | Bronze | Avro helpers for the transactional stream | Bytes | Decoded columns |
+| `src/common/bronze_*_spark_session.py` | Bronze | Session + S3A config, per pipeline | Env vars | SparkSession |
+| `src/common/bronze_*_minio_writer.py` | Bronze | `foreachBatch` Parquet write + checkpoint | DataFrame | Parquet in MinIO |
+| `src/common/registry_client.py` | Shared | Fetch latest Avro schema + id by subject | Subject | Schema, schema id |
+| `src/schemas/bronze_transactional_schemas.py` | Bronze | Static `StructType` per table | — | Schemas |
+| `src/schemas/bronze_behavioral_schemas.py` | Bronze | Column contracts only (registry is source of truth) | — | Constants |
+
+### Silver — Behavioral
+
+| File or Module | Layer | Responsibility | Input | Output |
+|---|---|---|---|---|
+| `src/jobs/silver_behavioral_job.py` | Silver | Orchestration only; sequencing, metrics, exit codes | `--execution-date` | Iceberg tables |
+| `src/jobs/silver_behavioral_migration_job.py` | Silver | One-time `event_key` migration; `--dry-run` | Fact + Bronze | Rewritten `event_key` |
+| `src/common/silver_behavioral_config.py` | Silver | Env, packages, table names, run id. No PySpark import | Env vars | Config values |
+| `src/common/silver_behavioral_spark_session.py` | Silver | Session + Iceberg/Lakekeeper/S3A config | Config | SparkSession |
+| `src/common/silver_behavioral_schema.py` | Silver | All Iceberg DDL + additive evolution | SparkSession | Tables ready |
+| `src/common/silver_behavioral_bronze_reader.py` | Silver | Read one day partition + lineage | Bronze Parquet | Raw DataFrame |
+| `src/common/silver_behavioral_validation.py` | Silver | `event_key`; valid/warning/rejected split | Raw DataFrame | `ValidationResult` |
+| `src/common/silver_behavioral_cleaning.py` | Silver | Normalize, cast, dedupe | Processable rows | Clean DataFrame |
+| `src/common/silver_behavioral_transform.py` | Silver | Kimball modeling; no I/O | Clean DataFrame | Fact + dim DataFrames |
+| `src/common/silver_behavioral_iceberg_writer.py` | Silver | Merge strategies + schema alignment | DataFrame | MERGE executed |
+| `src/common/silver_behavioral_quality_writer.py` | Silver | Quality, quarantine, audit writes | `ValidationResult` | Iceberg tables |
+| `workflow/dags/silver_behavioral_dag.py` | Silver | Airflow DAG; imports packages from config | Schedule | `spark-submit` |
+
+### Silver — Transactional
+
+| File or Module | Layer | Responsibility | Input | Output |
+|---|---|---|---|---|
+| `src/jobs/silver_transactional_job.py` | Silver | Entrypoint; loops six tables | — | Parquet in `silver/` |
+| `src/common/silver_transactional_bronze_reader.py` | Silver | Read one table's Bronze Parquet + lineage | Table name | DataFrame |
+| `src/common/silver_transactional_validation.py` | Silver | Per-table validation + timestamp repair | DataFrame | `ValidationResult` |
+| `src/common/silver_transactional_cleaning.py` | Silver | Trim, cast, dedupe | Valid rows | Clean DataFrame |
+| `src/common/silver_transactional_quality_writer.py` | Silver | Write quality issues to Iceberg | Issues DataFrame | Iceberg table |
+| `src/common/silver_transactional_spark_session.py` | Silver | Iceberg session factory (**not used by the job**) | Env vars | SparkSession |
+| `configs/spark/silver_transactional_config.py` | Silver | Supported tables, Bronze column contracts | — | Constants |
+
+### Tests
+
+| File | Responsibility |
+|---|---|
+| `src/jobs/test_silver_behavioral_pipeline.py` | Local Behavioral suite: validation, cleaning, transform, merge SQL, DDL contracts, config, DAG |
+| `src/jobs/test_validation.py` | Transactional validation smoke test |
+| `src/jobs/test_quality_writer.py` | Transactional quality-writer smoke test |
+| `src/jobs/test_bronze_reader.py` | Transactional Bronze reader smoke test |
+
+---
+
+## 10. Repository Structure
+
+```text
 modern_data_analytics_platform/
 ├── docker-compose.yml           # Full target infrastructure stack
-├── .env.example                 # Secrets template (see Section 9)
+├── Dockerfile                   # Bronze streaming job image
+├── requirements.txt             # Python deps for pipeline code
+├── .env.example                 # Secrets template (see Section 12)
 ├── .gitignore
 ├── README.md
 │
 ├── docs/
-│   ├── DESIGN.fa.md              # Infrastructure design rationale (Persian)
-│   ├── DEVELOPMENT.md            # Phased build guide (Bronze -> Gold -> Viz)
-│   ├── DEPLOYMENT.md             # VPS deployment guide
-│   └── TRAEFIK.fa.md             # Reverse-proxy / domain routing (Persian)
+│   ├── DESIGN.fa.md             # Infrastructure design rationale (Persian)
+│   ├── DEVELOPMENT.md           # Phased build guide (Bronze -> Gold -> Viz)
+│   ├── DEPLOYMENT.md            # VPS deployment guide
+│   └── TRAEFIK.fa.md            # Reverse-proxy / domain routing (Persian)
 │
 ├── src/
 │   ├── common/
-│   │   ├── bronze_transactional_kafka_reader.py
-│   │   ├── bronze_transactional_minio_writer.py
-│   │   ├── bronze_transactional_spark_session.py
-│   │   ├── bronze_transactional_transform.py
-│   │   ├── bronze_behavioral_kafka_reader.py
-│   │   ├── bronze_behavioral_minio_writer.py
-│   │   ├── bronze_behavioral_spark_session.py
-│   │   ├── bronze_behavioral_transform.py
-│   │   └── registry_client.py
+│   │   ├── bronze_transactional_*.py      # Bronze transactional modules
+│   │   ├── bronze_behavioral_*.py         # Bronze behavioral modules
+│   │   ├── registry_client.py             # Shared Schema Registry client
+│   │   ├── silver_transactional_*.py      # Silver transactional modules
+│   │   └── silver_behavioral_*.py         # Silver behavioral modules (9)
 │   │
-│   ├── jobs/
+│   ├── jobs/                              # Entrypoints + tests
 │   │   ├── bronze_transactional_job.py
-│   │   └── bronze_behavioral_job.py
+│   │   ├── bronze_behavioral_job.py
+│   │   ├── silver_transactional_job.py
+│   │   ├── silver_behavioral_job.py
+│   │   ├── silver_behavioral_migration_job.py
+│   │   └── test_*.py
 │   │
 │   └── schemas/
 │       ├── bronze_transactional_schemas.py
 │       └── bronze_behavioral_schemas.py
 │
-├── workflow/                    # Airflow scaffold (Silver phase) - not yet populated
+├── workflow/                    # Airflow
 │   ├── dags/
-│   ├── tasks/
-│   └── utils/
+│   │   └── silver_behavioral_dag.py
+│   ├── tasks/                   # placeholder
+│   └── utils/                   # placeholder
 │
-├── sql/                         # Gold/Silver SQL scaffold - not yet populated
+├── sql/                         # placeholders only; no SQL files yet
 │   ├── clickhouse/
 │   ├── iceberg/
 │   └── metabase/
 │
-└── configs/                     # Per-service config mounts - not yet populated
+└── configs/                     # Per-service config mounts
     ├── airflow/
-    ├── clickhouse/
-    ├── metabase/
-    ├── minio/
-    └── spark/
+    │   └── Dockerfile           # Airflow image with pipeline deps
+    ├── spark/
+    │   └── silver_transactional_config.py
+    ├── initial_catalog_database_creator.sql
+    ├── clickhouse/              # placeholder
+    ├── metabase/                # placeholder
+    └── minio/                   # placeholder
 ```
 
-`workflow/`, `sql/`, and `configs/` currently contain only placeholder files preserving the directory structure for later phases; there is no Silver/Gold/orchestration code yet.
+Directories marked *placeholder* contain only empty `test.md` files preserving the structure for later phases.
 
 ---
 
-## 8. Technology Stack
+## 11. Technology Stack
 
 | Category | Technology | Status |
 |---|---|---|
 | Streaming ingestion | Apache Kafka | External, not provisioned by this repository |
 | Schema management | Confluent-compatible Schema Registry | External; consumed by the Behavioral pipeline |
 | Stream processing | Apache Spark 3.5.3 (Structured Streaming) | Implemented |
-| Spark packages (Behavioral) | `spark-sql-kafka-0-10_2.12:3.5.3`, `spark-avro_2.12:3.5.3`, `hadoop-aws:3.3.4` | Implemented |
+| Batch processing | Apache Spark 3.5.3 (batch ETL) | Implemented (Silver) |
 | Object storage | MinIO (S3-compatible), Parquet + Snappy | Implemented |
+| Table format | Apache Iceberg 1.6.1 | Implemented (Silver Behavioral) |
+| Iceberg catalog | Lakekeeper (REST) | Implemented |
+| Iceberg catalog (alternate) | tabulario/iceberg-rest 1.6.0 | Provisioned but **not** targeted by pipeline env |
+| Orchestration | Apache Airflow 3.2.1 (CeleryExecutor, Postgres, Redis) | Implemented (Behavioral DAG only) |
 | Language / runtime | Python (PySpark) | Implemented |
 | Local/VPS infrastructure | Docker Compose | Implemented |
-| Orchestration | Apache Airflow 3.2.1 (CeleryExecutor, Postgres backend, Redis broker) | Provisioned, not yet integrated |
-| Table format | Apache Iceberg via REST Catalog 1.6.0 | Provisioned, not yet integrated |
 | OLAP engine | ClickHouse 24.8 | Provisioned, not yet integrated |
 | BI / visualization | Metabase v0.51.4 | Provisioned, not yet integrated |
 | Reverse proxy | Traefik (external network) | Provisioned for VPS deployment |
 
+### Spark Packages
+
+**Bronze** (see the `Dockerfile` `CMD`):
+
+```text
+org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3
+org.apache.hadoop:hadoop-aws:3.3.4
+com.amazonaws:aws-java-sdk-bundle:1.12.262
+```
+
+**Silver Behavioral** — defined once in `src/common/silver_behavioral_config.py` and imported by the DAG, the job, the migration job, and the tests:
+
+```text
+org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.1
+org.apache.iceberg:iceberg-aws-bundle:1.6.1      # required by S3FileIO
+org.apache.hadoop:hadoop-aws:3.3.4
+com.amazonaws:aws-java-sdk-bundle:1.12.262       # required by s3a
+```
+
+Kafka and Avro packages are intentionally absent from the Silver list: Silver is a batch job over Parquet and never touches Kafka.
+
 ---
 
-## 9. Configuration Management
+## 12. Configuration Management
 
-All configuration is environment-variable driven. No secrets or endpoints are hardcoded in application code; required variables are validated with a fail-fast `get_required_env()` helper that raises immediately if a value is missing or blank, rather than silently defaulting.
+All configuration is environment-variable driven. No secrets or endpoints are hardcoded in application code. The Bronze pipelines validate required variables with a fail-fast `get_required_env()` helper; the Silver Behavioral pipeline validates with `validate_runtime_config()`, which raises before any Spark action if MinIO credentials or URLs are missing or malformed.
 
-### Transactional Pipeline
+### Bronze Transactional
 
 | Variable | Required | Default | Used By |
 |---|---|---|---|
@@ -337,7 +751,7 @@ All configuration is environment-variable driven. No secrets or endpoints are ha
 | `MINIO_ROOT_PASSWORD` | Yes | — | Spark Session |
 | `SPARK_LOG_LEVEL` | No | `WARN` | Spark Session |
 
-### Behavioral Pipeline
+### Bronze Behavioral
 
 | Variable | Required | Default | Used By |
 |---|---|---|---|
@@ -349,17 +763,45 @@ All configuration is environment-variable driven. No secrets or endpoints are ha
 | `CHECKPOINT_BASE_PATH` | No | `s3a://checkpoints/bronze` | Job |
 | `BEHAVIORAL_BRONZE_CHECKPOINT_PATH` | No | `{CHECKPOINT_BASE_PATH}/behavioral/events` | Job |
 | `BEHAVIORAL_TRIGGER_INTERVAL` | No | `30 seconds` | Job |
-| `SPARK_MASTER_URL` | No | `spark://spark-master:7077` | Spark Session |
-| `MINIO_ENDPOINT` | No | `http://minio:9000` | Spark Session |
 | `MINIO_ACCESS_KEY` (falls back to `MINIO_ROOT_USER`) | Yes (one of) | — | Spark Session |
 | `MINIO_SECRET_KEY` (falls back to `MINIO_ROOT_PASSWORD`) | Yes (one of) | — | Spark Session |
-| `SPARK_PACKAGES` | No | see [Section 8](#8-technology-stack) | Spark Session |
+| `SPARK_PACKAGES` | No | see [Section 11](#11-technology-stack) | Spark Session |
 | `SPARK_SQL_SHUFFLE_PARTITIONS` | No | `4` | Spark Session |
-| `SPARK_LOG_LEVEL` | No | `WARN` | Spark Session |
 | `BRONZE_WRITE_COALESCE_PARTITIONS` | No | `2` | MinIO Writer |
 | `BRONZE_WRITE_MAX_RECORDS_PER_FILE` | No | `500000` | MinIO Writer |
 
-> The two pipelines resolve their MinIO output location differently: Transactional requires an explicit `MINIO_BUCKET`; Behavioral defaults to a bucket literally named `bronze` unless overridden. Keep this in mind when provisioning buckets — see [Section 13](#13-engineering-notes).
+### Silver Behavioral
+
+Resolved in `src/common/silver_behavioral_config.py`. All have repository-compatible defaults.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SPARK_MASTER_URL` | `spark://spark-master:7077` | Submit target |
+| `ICEBERG_CATALOG_NAME` | `lakekeeper` | Spark catalog alias |
+| `ICEBERG_REST_URI` | `http://lakekeeper:8181/catalog` | REST catalog endpoint |
+| `BEHAVIORAL_ICEBERG_WAREHOUSE` | falls back to `ICEBERG_WAREHOUSE`, then `warehouse` | Lakekeeper warehouse **name** |
+| `BEHAVIORAL_ICEBERG_NAMESPACE` | falls back to `ICEBERG_NAMESPACE`, then `silver` | Star-schema namespace |
+| `BEHAVIORAL_QUALITY_NAMESPACE` | `silver_quality` | Quality/audit namespace |
+| `BEHAVIORAL_BRONZE_OUTPUT_PATH` | `s3a://bronze/behavioral/events` | Bronze source (same var Bronze writes with) |
+| `BEHAVIORAL_SPARK_PACKAGES` | see [Section 11](#11-technology-stack) | Override the package list |
+| `MINIO_ENDPOINT` | `http://minio:9000` | S3 endpoint |
+| `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | fall back to `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | Credentials (**required**) |
+| `AWS_REGION` | `us-east-1` | S3 region |
+| `SPARK_SQL_SHUFFLE_PARTITIONS` | `8` | Shuffle width |
+| `SILVER_LOG_LEVEL` | `INFO` | Python log level |
+| `SPARK_LOG_LEVEL` | `WARN` | Spark log level |
+
+> **Warehouse naming.** Lakekeeper resolves a warehouse by **name**, not by URI. The shared `x-pipeline-env` sets `ICEBERG_WAREHOUSE="s3://warehouse"`, which a REST catalog cannot resolve. `get_warehouse()` normalizes a URI-shaped value to its name component, and the DAG additionally passes `BEHAVIORAL_ICEBERG_WAREHOUSE` explicitly.
+
+### Silver Transactional
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `MINIO_BUCKET_SILVER` | `silver` | Output bucket |
+| `MINIO_ENDPOINT` | `http://minio:9000` | S3 endpoint |
+| `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | `minioadmin` | Credentials |
+| `ICEBERG_CATALOG_NAME` | `lakekeeper` | Quality-table catalog |
+| `SILVER_QUALITY_NAMESPACE` | `silver_quality` | Quality namespace |
 
 ### Docker Compose / Infrastructure Secrets (`.env`)
 
@@ -374,11 +816,20 @@ Topology (ports, image versions, hostnames, Kafka address) lives in `docker-comp
 | `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD` | Gold-layer database |
 | `METABASE_DB_USER`, `METABASE_DB_PASSWORD` | Metabase metadata database |
 
-`.env` is git-ignored; only `.env.example` (with placeholder values) is committed.
+`.env` is git-ignored; only `.env.example` (with placeholder values) is committed. Never commit real credentials.
+
+> `.env.example` does not currently list every variable `docker-compose.yml` reads — see [Section 21](#21-engineering-notes).
 
 ---
 
-## 10. Development Setup
+## 13. Installation and Development Setup
+
+### Prerequisites
+
+- Docker and Docker Compose
+- Python 3.9+ (only needed for running code outside the containers; the Spark images ship their own runtime)
+- Java 8, 11, or 17 for local Spark runs (Spark 3.5.x supported versions)
+- Network access to an external Kafka cluster and Schema Registry
 
 ### 1. Clone and configure
 
@@ -389,117 +840,330 @@ cp .env.example .env
 # edit .env with real credentials
 ```
 
-### 2. Start local infrastructure
+### 2. Optional: local Python environment
+
+Only required to run the test suite or jobs outside Docker.
+
+**Linux / macOS**
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+**Windows (PowerShell)**
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+`requirements.txt` pins `pyspark==3.5.1`, while the Docker images and the Spark package lists target 3.5.3 — see [Section 21](#21-engineering-notes).
+
+### 3. Start infrastructure
 
 ```bash
 docker compose up -d
 docker compose ps
 ```
 
-This brings up Postgres, Redis, Airflow, Spark (master + worker), MinIO, the Iceberg REST catalog, ClickHouse, and Metabase. Kafka is **not** part of this stack — confirm reachability separately:
+This brings up Postgres, Redis, Airflow, Spark (master + worker), MinIO, both Iceberg catalogs (`iceberg-rest` and Lakekeeper), ClickHouse, and Metabase. Kafka is **not** part of this stack — confirm reachability separately:
 
 ```bash
 nc -zv <KAFKA_HOST> 9092
 ```
 
-### 3. Create MinIO buckets
+### 4. Buckets
 
-Buckets are not created automatically. For the Bronze phase, create `bronze` and `checkpoints` via the MinIO Console (`http://localhost:9001`) or the `mc` CLI, for example:
+The `createbuckets` service automatically creates the `warehouse` and `bronze` buckets on startup. The `checkpoints` and `silver` buckets are **not** created automatically:
 
 ```bash
-docker run --rm --network modern_data_analytics_platform_datalake \
-  -e MINIO_ROOT_USER=<user> \
-  -e MINIO_ROOT_PASSWORD=<password> \
-  minio/mc sh -c '
-    mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" &&
-    mc mb --ignore-existing local/bronze local/checkpoints &&
-    mc ls local
-  '
+docker compose exec minio mc alias set local http://minio:9000 <user> <password>
+docker compose exec minio mc mb --ignore-existing local/checkpoints local/silver
+docker compose exec minio mc ls local
 ```
 
-### 4. Run a Bronze job
+---
 
-`src/` is mounted into the Spark containers at `/opt/spark-apps`. Jobs are run with `spark-submit` inside `spark-master`:
+## 14. Running the Pipeline
+
+Required order: **Bronze must have landed data for a date before Silver can process that date.**
+
+### Bronze (streaming)
+
+`src/` is mounted into the Spark containers at `/opt/spark-apps`.
 
 ```bash
 docker compose exec spark-master /opt/spark/bin/spark-submit \
   --master spark://spark-master:7077 \
-  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3,org.apache.spark:spark-avro_2.12:3.5.3,org.apache.hadoop:hadoop-aws:3.3.4 \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \
   /opt/spark-apps/jobs/bronze_transactional_job.py
 ```
 
 ```bash
 docker compose exec spark-master /opt/spark/bin/spark-submit \
   --master spark://spark-master:7077 \
-  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3,org.apache.spark:spark-avro_2.12:3.5.3,org.apache.hadoop:hadoop-aws:3.3.4 \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3,org.apache.spark:spark-avro_2.12:3.5.3,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \
   /opt/spark-apps/jobs/bronze_behavioral_job.py
 ```
 
-> Both job entrypoints currently have import-path inconsistencies that must be resolved before they will run successfully — see [Section 13](#13-engineering-notes).
+Verify output:
 
-For VPS deployment, firewall rules, and reverse-proxy/domain configuration, see `docs/DEPLOYMENT.md` and `docs/TRAEFIK.fa.md`.
+```bash
+docker compose exec minio mc ls --recursive local/bronze/behavioral/events
+```
+
+### Silver Behavioral (batch)
+
+**Via Airflow (recommended).** The `silver_behavioral_etl` DAG runs daily at 01:30 with 3 retries, a 2-hour timeout, and `max_active_runs=1`. Unpause it in the UI. For a specific partition, trigger with config:
+
+```json
+{ "processing_date": "2026-07-17" }
+```
+
+**Manually.** `src/` is mounted into the Airflow containers at `/opt/airflow/src`:
+
+```bash
+docker compose exec airflow-worker bash -lc "
+  spark-submit --master spark://spark-master:7077 \
+    --packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.1,org.apache.iceberg:iceberg-aws-bundle:1.6.1,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \
+    /opt/airflow/src/jobs/silver_behavioral_job.py --execution-date 2026-07-17"
+```
+
+Implemented arguments: `--execution-date YYYY-MM-DD` (required), `--pipeline-run-id` (optional override).
+
+**Migration.** Required once if `fact_behavioral_events` already holds rows written with the previous `event_key` format:
+
+```bash
+docker compose exec airflow-worker bash -lc "
+  spark-submit --master 'local[*]' \
+    --packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.1,org.apache.iceberg:iceberg-aws-bundle:1.6.1,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \
+    /opt/airflow/src/jobs/silver_behavioral_migration_job.py --dry-run"
+```
+
+Drop `--dry-run` to apply. Safe to re-run; a second run is a no-op.
+
+### Silver Transactional (batch)
+
+No DAG. The job takes no arguments and processes all six tables:
+
+```bash
+docker compose exec spark-master /opt/spark/bin/spark-submit \
+  --master spark://spark-master:7077 \
+  --packages org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \
+  /opt/spark-apps/jobs/silver_transactional_job.py
+```
+
+### Expected outputs
+
+| Step | Output |
+|---|---|
+| Bronze Transactional | `s3a://<MINIO_BUCKET>/bronze/transactional/<table>/<yyyyMMdd>/` |
+| Bronze Behavioral | `s3a://bronze/behavioral/events/year=/month=/day=/` |
+| Silver Behavioral | Iceberg tables in `lakekeeper.silver` and `lakekeeper.silver_quality` |
+| Silver Transactional | `s3a://silver/transactional/<table>/` |
 
 ---
 
-## 11. Current Implementation Status
+## 15. Logging and Error Handling
 
-**Implemented**
-- Bronze Transactional ingestion for six tables (`categories`, `order_items`, `orders`, `product_price_history`, `products`, `users`) with static schema-on-read and per-table date partitioning.
-- Bronze Behavioral ingestion with Confluent Avro decoding, live Schema Registry lookup, and a quarantine-not-drop validation pattern.
-- Kafka Structured Streaming integration (Transactional reader).
+### Logging
+
+All pipelines use Python's standard `logging`, writing to stdout — there are no log files. In containers, logs are retrieved with `docker compose logs <service>`; for DAG runs, through the Airflow UI task log.
+
+| Setting | Default | Scope |
+|---|---|---|
+| `SILVER_LOG_LEVEL` | `INFO` | Silver Behavioral Python logger |
+| `SPARK_LOG_LEVEL` | `WARN` | Spark's own logging |
+
+The Silver Behavioral session logs a **credential-free** configuration summary at startup (`describe_runtime_config()`).
+
+### Error handling
+
+| Pipeline | Behavior on failure |
+|---|---|
+| Bronze Transactional | Stops all streaming queries cleanly, then propagates |
+| Bronze Behavioral | Bad records are kept and flagged, not dropped; the stream does not fail on a decode error |
+| **Silver Behavioral** | Nothing is swallowed. The failure is recorded in `behavioral_pipeline_runs` as `FAILED`, then the **original exception is re-raised**. `spark-submit` exits non-zero and Airflow fails the task. If recording the failure itself fails, that is logged and the original exception still propagates |
+| **Silver Transactional** | Per-table `except ... continue`. A table failure is logged, the loop moves on, and the job exits 0 — see [Section 21](#21-engineering-notes) |
+
+### Record-level handling in Silver Behavioral
+
+| Outcome | What happens |
+|---|---|
+| Error | Quarantined in `behavioral_events_quarantine` with the raw values and a JSON snapshot; excluded from the fact |
+| Warning | **Processed**, flagged in `dq_flags`, recorded in `behavioral_data_quality` |
+| Empty partition | Run ends as `SUCCESS_EMPTY`; not a failure |
+| Assertion breach | `SilverBehavioralError` raised; task fails |
+
+### Diagnostics available
+
+Every quarantined and flagged record retains `kafka_topic`, `kafka_partition`, `kafka_offset`, `kafka_timestamp`, `bronze_file_path`, `bronze_ingestion_timestamp`, `pipeline_run_id`, and a JSON `original_record` — enough to trace any record back to its exact Kafka message and Bronze file.
+
+---
+
+## 16. Testing
+
+There is no `pytest` suite. Tests are runnable scripts with a `main()`, following the existing `src/jobs/test_*.py` convention.
+
+### Silver Behavioral suite
+
+```bash
+cd src && python3 jobs/test_silver_behavioral_pipeline.py
+```
+
+Runs against a local Spark session with synthetic Bronze-shaped data — no MinIO, no Iceberg catalog, no Docker. Covers:
+
+- Config: package list completeness, warehouse normalization, deterministic run id
+- Merge SQL for all five strategies, plus error paths
+- DAG construction: shared package list, no forced `local[*]`, retries
+- Empty Bronze partitions
+- Validation: valid/warning/rejected split; anonymous users treated as warnings
+- Deterministic `event_key`: stability across runs, topic participation, fallback, unkeyable rejection
+- Quarantine and quality: uniqueness, deterministic keys
+- Cleaning: dedupe, normalization, lineage preservation
+- Transform: grain, `dq_flags`, natural `user_id`
+- **DDL contracts**: every builder's output is checked by name and type against the DDL that actually runs
+
+### Transactional smoke tests
+
+```bash
+cd src && python3 jobs/test_validation.py
+cd src && python3 jobs/test_quality_writer.py
+cd src && python3 jobs/test_bronze_reader.py
+```
+
+These require a Spark environment and, for the quality-writer test, a reachable Iceberg catalog.
+
+### Known gaps
+
+- No Iceberg or catalog execution is tested. MERGE statements are verified as SQL strings only; the real MERGE, `ALTER TABLE ADD COLUMNS`, and Lakekeeper round-trip are untested.
+- No end-to-end test against MinIO.
+- No Bronze test coverage (`test_bronze_reader.py` covers the *Silver* Transactional Bronze reader, not the Bronze layer itself).
+- No Airflow DAG import test.
+- No CI.
+
+---
+
+## 17. Design Decisions
+
+**Bronze and Silver are separated because they answer different questions.** Bronze records what arrived; Silver decides what is true. Because Silver never mutates Bronze, any Silver bug — a wrong validation rule, a bad merge — is fixed by changing code and re-running over unchanged Bronze data. No re-ingestion from Kafka is ever required.
+
+**Silver has far more modules than Bronze because it makes far more decisions.** Bronze does one thing per pipeline: get bytes into Parquet safely. Silver decides validity, severity, normalization, grain, dimensional structure, and write semantics. Each of those is a separate reason to change the code, so each gets its own module. The practical payoff is testability: `silver_behavioral_transform.py` performs no I/O, so the entire star schema can be tested with no catalog at all.
+
+**Transactional and Behavioral are separate all the way down** — separate Bronze jobs, separate Silver modules, separate Spark sessions, no shared code between the two Silver pipelines. The streams differ in wire format (JSON vs Confluent Avro), schema strategy (static vs registry), shape (six entity tables vs one event stream), and grain. They are also owned by different teams; sharing a module would mean one team's change can break the other's pipeline, and every merge becomes a conflict. Isolation costs some duplication and buys independent deployability.
+
+**Config is a PySpark-free module for a specific reason.** `silver_behavioral_config.py` imports only the standard library, which lets the Airflow DAG import it at parse time. The DAG therefore *derives* its `--packages` list from the same constant the job uses. The alternative — a hand-copied list in the DAG — is exactly how a manual run and an Airflow run come to use different dependency versions.
+
+**Merge strategy is per table, not global.** `WHEN MATCHED THEN UPDATE SET *` is wrong for dimensions holding `first_seen_at`: that value is the current batch's minimum, so a blanket overwrite silently destroys the historical first sighting on every single run. Facts are immutable and get insert-only. Dimensions get least/greatest preservation. The strategy is an explicit argument at every call site, so the decision is visible in review.
+
+**Warnings are kept, not rejected.** Anonymous users, unknown devices, and malformed IPs are real traffic. Dropping them would understate every funnel metric the project needs to produce. They flow into the fact with `dq_flags` and are simultaneously recorded in the quality table, so they are both counted and visible.
+
+**Two schema strategies, deliberately.** Transactional schemas are static and checked in because those topics are internally defined and stable. Behavioral schemas are always fetched live from the Schema Registry — the schema module's docstring explicitly forbids checking in a copy — because the registry is the source of truth for that contract.
+
+**Idempotency is a design constraint, not a feature.** Airflow retries. Backfills re-run. Both must converge, so every Silver Behavioral write is a MERGE on a deterministic key, including the quality and audit tables. This is why `pipeline_run_id` is derived from the processing date rather than a timestamp or UUID: a retry must overwrite its own audit row, not append a new one.
+
+**Behavioral does not own `dim_user`.** Behavioral events carry only a `user_id`; the Transactional domain owns the real user attributes. A Behavioral `dim_user` could only be a placeholder with an incompatible schema, and whichever pipeline ran last would clobber the other. Instead, `fact_behavioral_events` retains the **natural** `user_id`. Events for users absent from the Transactional dimension still land and are still countable — they simply do not join yet. When a stable surrogate key exists, `user_key` is added as an additive column.
+
+**Infrastructure is provisioned ahead of code.** `docker-compose.yml` defines ClickHouse and Metabase before any Gold code exists. This is deliberate phase sequencing from `docs/DEVELOPMENT.md`: each phase's services are available before that phase's code is written.
+
+**How this prepares for Gold.** Gold needs one wide, denormalized table. Silver Behavioral already provides the conformed `dim_date`, a stable event grain, and clean dimension keys, so the Gold build is a join and a flatten rather than a rescue operation. The remaining blocker is the Transactional star schema — without `dim_user`, `dim_product`, and `fact_order`, the cross-domain joins the Gold reports need (return rate by category, revenue by loyalty tier) cannot be built.
+
+---
+
+## 18. Current Implementation Status
+
+| Layer | Status | Description |
+|---|---|---|
+| **Bronze** | Implemented | Kafka → MinIO Parquet, both pipelines, with schema enforcement and lineage |
+| **Silver — Behavioral** | Implemented | Iceberg star schema, idempotent MERGE, quarantine, quality + audit tables, Airflow DAG |
+| **Silver — Transactional** | Partial | Validated + cleansed Parquet. No Iceberg tables, no Kimball model, no DAG |
+| **Gold** | Planned | ClickHouse One Big Table + Metabase dashboards. Infrastructure provisioned; no code |
+
+### Implemented
+
+- Bronze Transactional ingestion for six tables with static schema-on-read and per-table date partitioning.
+- Bronze Behavioral ingestion with Confluent Avro decoding, live Schema Registry lookup, and quarantine-not-drop validation.
 - Per-pipeline Spark session bootstrapping, including MinIO/S3A configuration.
-- MinIO/S3A Parquet writers with checkpointing, small-file mitigation on the Behavioral side.
+- MinIO/S3A Parquet writers with checkpointing; small-file mitigation on the Behavioral side.
 - Schema Registry client, written for reuse across future Avro-backed pipelines.
-- Environment-based configuration with fail-fast validation of required variables.
-- Base infrastructure via Docker Compose: Postgres, Redis, Airflow (5 services), Spark, MinIO, Iceberg REST catalog, ClickHouse, Metabase, Traefik labels for VPS routing.
+- **Silver Behavioral**: Iceberg tables over Lakekeeper; deterministic `event_key`; three-way validation; quarantine; per-table merge strategies; current-state quality table; audit/metrics table; post-write DQ assertions; additive schema evolution; a one-time `event_key` migration job; a local test suite.
+- **Silver Transactional**: Bronze reader, validation with timestamp repair, cleaning, and cleansed Parquet output.
+- Airflow DAG for Silver Behavioral with retries, timeout, backfill support, and `max_active_runs=1`.
+- Environment-based configuration with fail-fast validation.
+- Base infrastructure via Docker Compose, with automatic `bronze` / `warehouse` bucket creation.
 
-**In Progress**
-- Reconciling import paths and package structure across `src/jobs/` and `src/common/`/`src/schemas/` (see [Section 13](#13-engineering-notes)).
-- Implementing the Behavioral Kafka reader (`read_behavioral_kafka_stream`).
-- Automated MinIO bucket provisioning (currently a manual, per-phase step).
-- Testing (no test suite currently exists).
-- Data quality checks beyond Bronze-level decode/field validation.
-- Monitoring and observability.
+### In progress / not implemented
 
-**Future**
-- Silver layer: Iceberg tables via the REST catalog, data cleansing, Kimball star schema (`dim_user`, `dim_product`, `dim_date` with SCD Type 2, `fact_order`, `fact_behavioral_events`).
-- Gold layer: denormalized One Big Table in ClickHouse for OLAP.
-- Airflow DAG orchestration for Silver/Gold batch ETL.
-- Metabase dashboards (conversion funnel, behavior funnel, revenue/discount metrics, cohort analysis).
-- Near-real-time pipeline monitoring (Kafka-based alerting DAG).
-- Data lineage tooling.
-- CI/CD.
-- Docker Compose profiles to start only the services needed per phase, instead of the full stack.
+- Silver Transactional: Iceberg output, Kimball star schema (`dim_user`, `dim_product`, `fact_order`, SCD Type 2), an Airflow DAG, and failure propagation.
+- Gold layer (ClickHouse OBT) and Metabase dashboards.
+- Automated `checkpoints` / `silver` bucket provisioning.
+- Integration tests against MinIO and the Iceberg catalog; CI.
+- Monitoring and observability; the near-real-time Kafka monitoring dashboard.
+- Consolidating the two Iceberg catalog services down to one.
 
 ---
 
-## 12. Git Workflow
+## 19. Roadmap
+
+Ordered by dependency, not priority.
+
+1. **Silver Transactional star schema** — `dim_user`, `dim_product`, `dim_category`, `fact_order`, `fact_order_item`, with SCD Type 2 for product price history. Blocks Gold.
+2. **Silver Transactional hardening** — Iceberg output via the existing `silver_transactional_spark_session.py`, idempotent MERGE instead of `overwrite`, and failure propagation instead of `except ... continue`.
+3. **Silver Transactional DAG** — orchestration parity with Behavioral.
+4. **Gold layer** — denormalized One Big Table in ClickHouse, with tuned `ORDER BY` and partition keys.
+5. **Metabase dashboards** — return rate by category, funnel analysis, revenue/discount, loyalty-tier behavior, wishlist-to-purchase.
+6. **Near-real-time monitoring** — Kafka-based health dashboard (order rate, funnel ratios, anomaly detection, error rates).
+7. **Testing** — Iceberg integration tests, end-to-end tests against MinIO, Bronze coverage, CI.
+8. **Schema versioning** — formalize the additive-evolution pattern across both domains.
+9. **Performance** — Iceberg compaction and snapshot expiry; Bronze small-file mitigation for Transactional.
+10. **Operational cleanup** — one Iceberg catalog; automatic bucket provisioning; Compose profiles to start only the services a phase needs.
+
+---
+
+## 20. Git Workflow
 
 Development follows a feature-branch workflow aligned to the project's phased build order (see `docs/DEVELOPMENT.md`):
 
 - `main` tracks stable, working infrastructure and pipeline code.
 - Work happens on phase-scoped feature branches, e.g. `feature/bronze-streaming`, `feature/silver-iceberg`, `feature/gold-clickhouse`.
-- Branches are merged into `main` once the corresponding phase's verification checklist passes (see the relevant phase in `docs/DEVELOPMENT.md`).
+- Branches are merged into `main` once the corresponding phase's verification checklist passes.
 - `.env` is never committed; only `.env.example` is tracked.
 - Prefer small, phase-scoped pull requests over broad cross-layer changes, so infrastructure, Bronze, Silver, and Gold changes remain independently reviewable.
+- **Because the two Silver pipelines are owned by different teams, avoid editing the other domain's modules.** The isolation described in [Section 17](#17-design-decisions) exists so that Behavioral and Transactional work can proceed in parallel without merge conflicts.
 
 ---
 
-## 13. Engineering Notes
+## 21. Engineering Notes
 
-**Kafka and Schema Registry are external by design.** Both are treated as managed dependencies the platform connects to, not services it owns — Spark and Airflow only need the bootstrap servers/registry URL. This keeps the Compose stack's resource footprint down and avoids duplicating infrastructure the platform doesn't control.
+**Kafka and Schema Registry are external by design.** Both are treated as managed dependencies the platform connects to, not services it owns. This keeps the Compose stack's footprint down and avoids duplicating infrastructure the platform doesn't control.
 
-**Two schema strategies, deliberately.** Transactional schemas are static and checked into the repository because those topics are internally defined and stable. Behavioral schemas are always fetched live from the Schema Registry — the schema module's docstring explicitly forbids checking in a copy — because the registry is the source of truth for that contract.
+**Quarantine, not drop.** Records that fail Avro decoding in Bronze are kept with validation metadata rather than discarded, so bad data is diagnosable and Silver decides how to handle it.
 
-**Quarantine, not drop, for Behavioral data quality.** Records that fail Avro decoding or whose wire schema id doesn't match the registry's are kept with validation metadata rather than discarded, so bad data is diagnosable and Silver decides how to handle it, rather than the Bronze job failing or silently losing records.
+**Small-file mitigation is opt-in per writer.** The Behavioral writer coalesces each micro-batch and caps file size; the Transactional writer does not yet apply the same treatment.
 
-**Small-file mitigation is opt-in per writer.** The Behavioral writer coalesces each micro-batch and caps file size (`BRONZE_WRITE_COALESCE_PARTITIONS`, `BRONZE_WRITE_MAX_RECORDS_PER_FILE`); the Transactional writer does not yet apply the same treatment.
+### Known issues
 
-**Infrastructure is provisioned ahead of code.** `docker-compose.yml` already defines Airflow, the Iceberg REST catalog, ClickHouse, and Metabase, even though no Silver/Gold code exists yet. This is a deliberate infrastructure-first sequencing choice from the project's phased build plan (`docs/DEVELOPMENT.md`), not scope creep — each phase's services are meant to be available before that phase's code is written.
+**Bronze overwrites the producer's `event_id`.** `bronze_behavioral_transform.standardize_behavioral_events` replaces the payload's `event_id` with `sha2(kafka_topic || kafka_partition || kafka_offset, 256)`. This is why `event_id` is unique and non-null across the whole dataset — by construction, not by luck. Two consequences: the producer's original `event_id` is not recoverable from Bronze, and Bronze's own `missing_event_id` validation rule is dead code (a hash is never null). If Bronze is fixed to preserve the real `event_id`, Silver's uniqueness guarantee must be re-verified.
 
-**Known limitations to resolve before running the jobs:**
-- `src/jobs/bronze_transactional_job.py` imports from module paths (`common.kafka_reader`, `common.minio_writer`, `common.spark_session`, `schema.transactional_schemas`, `transformations.bronze_transform_transactional`) that do not match the current `src/common/` and `src/schemas/` layout.
-- `src/common/bronze_behavioral_kafka_reader.py` does not currently define `read_behavioral_kafka_stream`, which `src/jobs/bronze_behavioral_job.py` imports.
-- The Behavioral job sets its own `src/` directory on `sys.path`; the Transactional job does not, so it currently depends on how it's invoked (e.g. `--py-files`, or a working directory under `src/`) to resolve its `common`/`schemas` imports.
-- The Transactional and Behavioral pipelines default to different MinIO bucket conventions (explicit `MINIO_BUCKET` vs. a hardcoded `bronze` default) — worth aligning before Phase 2 (Silver) reads from both.
-- There is no `requirements.txt` / dependency manifest for the pipeline code yet; dependencies are currently implied by the Spark image and the `--packages` list in [Section 8](#8-technology-stack).
+**`Silver Transactional` swallows per-table failures.** `silver_transactional_job.py` wraps each table in `try / except ... continue`. A failure is logged, the loop continues, and the job exits 0 — so an orchestrator would report success after a partial failure. Additionally, the quality-issue write happens *before* the cleaned-data write, so if the quality write raises, that table's cleaned output is never produced, silently.
+
+**`Silver Transactional` quality issues likely never persist.** Two independent reasons: (1) `validate_quality_dataframe` requires `_source_file`, `_kafka_topic`, `_kafka_partition`, `_kafka_offset`, `_kafka_timestamp`, and `bronze_ingestion_timestamp`, but `build_quality_issues` does not produce them, so it raises `ValueError`; (2) the job's Spark session has no Iceberg catalog configured, so the write could not resolve the table anyway. Both are caught by the `except ... continue` above.
+
+**The quality write is a plain `.append()`.** `silver_transactional_quality_writer` appends, so every re-run duplicates every issue. The Behavioral pipeline deliberately does not follow this pattern and MERGEs on a deterministic `quality_key` instead.
+
+**Two Iceberg catalogs are provisioned.** Both `iceberg-rest` (tabulario 1.6.0) and `lakekeeper` run. Only Lakekeeper is targeted by the pipeline environment. The unused service should be removed once the team confirms the choice.
+
+**`ICEBERG_WAREHOUSE` is set to a URI in shared config.** `x-pipeline-env` sets `s3://warehouse`, but Lakekeeper resolves warehouses by name. Silver Behavioral normalizes this defensively and the DAG passes an explicit override, but the shared variable itself should be corrected once both teams agree.
+
+**`requirements.txt` pins `pyspark==3.5.1`** while the Docker images are `apache/spark:3.5.3` and every `--packages` list targets 3.5.3. Harmless inside the containers (the image's own PySpark wins) but misleading for local runs.
+
+**`configs/spark` is mounted over Spark's config directory.** `docker-compose.yml` mounts `./configs/spark` to `/opt/spark/conf` on the Spark containers, replacing Spark's own conf directory with one holding a single Python file. `silver_transactional_bronze_reader.py` relies on this via `sys.path.append("/opt/spark/conf")` — which means it cannot resolve its config under Airflow, where that mount does not exist. The Silver Behavioral modules deliberately do not use this pattern.
+
+**`.env.example` is incomplete.** `docker-compose.yml` reads `LAKEKEEPER_IMAGE`, `LAKEKEEPER_PG_ENCRYPTION_KEY`, `ICEBERG_WAREHOUSE_NAME`, `ICEBERG_WAREHOUSE_BUCKET`, and `MINIO_BRONZE_BUCKET`, none of which appear in `.env.example`. All have defaults except the Lakekeeper encryption key.
+
+**Behavioral `dim_user` rows may exist from earlier runs.** A previous version of the Silver Behavioral pipeline wrote placeholder rows into `silver.dim_user`. The current pipeline does not write that table at all. Those rows should be reconciled or removed before the Transactional team publishes the real `dim_user`.
+
+**`EVENT_CATEGORY_MAPPING` is unverified.** The `event_type` → `event_category` mapping in `silver_behavioral_transform.py` is inferred from which fields each event populates, not confirmed against real Kafka messages. The project brief names `click` as an example event type, and it is absent from every category list, so it currently falls into `other`. Unknown types are a warning, never a rejection, so nothing is lost — but funnel categories may be wrong until the mapping is confirmed against live data.
