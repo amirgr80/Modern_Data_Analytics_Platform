@@ -56,6 +56,7 @@ def process_table(
     bronze_df = read_bronze_transactional_table(
         spark,
         table_name,
+        partition_dates=["20260712"],
     )
 
     if bronze_df.isEmpty():
