@@ -1,198 +1,326 @@
+"""Independent Bronze -> Silver Behavioral batch ETL."""
+
 from __future__ import annotations
 
 import argparse
+from datetime import date, datetime
+import logging
 import os
 import sys
-from datetime import date, datetime
+from typing import Optional
 
 CURRENT_FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.dirname(CURRENT_FILE_DIR)
-
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
+from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import functions as F
 
-from common.iceberg_catalog import (
-    create_iceberg_spark_session,
-    ensure_silver_behavioral_tables,
-    qualified_table,
+from common.silver_behavioral_bronze_reader import read_bronze_behavioral_partition
+from common.silver_behavioral_cleaning import clean_behavioral_data
+from common.silver_behavioral_config import BehavioralRuntimeConfig
+from common.silver_behavioral_iceberg_writer import MergeStrategy, merge_dataframe
+from common.silver_behavioral_pipeline_state import run_key_for, write_pipeline_state
+from common.silver_behavioral_quality_writer import (
+    write_behavioral_quality_issues,
+    write_behavioral_quarantine,
+)
+from common.silver_behavioral_schema import (
+    TABLE_DIM_DEVICE,
+    TABLE_DIM_EVENT_TYPE,
+    TABLE_DIM_SESSION,
+    TABLE_FACT_EVENTS,
+    ensure_behavioral_tables,
+)
+from common.silver_behavioral_spark_session import (
+    create_silver_behavioral_spark_session,
 )
 from common.silver_behavioral_transform import (
-    apply_silver_data_quality,
-    build_dim_date_seed,
+    add_dimension_keys,
     build_dim_device_updates,
     build_dim_event_type_updates,
     build_fact_behavioral_events,
-    build_quarantine_rows,
-    deduplicate_events,
-    read_bronze_behavioral_partition,
     recompute_dim_session,
-    recompute_dim_user,
-    split_valid_invalid,
+    resolve_shared_user_keys,
 )
+from common.silver_behavioral_validation import validate_behavioral_data
 
 
-# NOTE: Step-3 version. Full Bronze -> Silver star schema:
-#   provision tables -> seed dim_date -> read + dedupe Bronze
-#   -> split valid/invalid -> quarantine invalid
-#   -> DQ-flag valid -> upsert dim_device / dim_event_type
-#   -> upsert fact_behavioral_events
-#   -> recompute dim_user / dim_session for touched entities.
-# All writes are idempotent MERGEs, so reruns/backfills don't duplicate.
-
-DEFAULT_BRONZE_BEHAVIORAL_PATH = "s3a://bronze/behavioral/events"
-
-DIM_DATE_SEED_START = date(2023, 1, 1)
-DIM_DATE_SEED_END = date(2030, 12, 31)
+logging.basicConfig(
+    level=os.getenv("SILVER_LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
-def get_bronze_behavioral_path() -> str:
-    return os.getenv("BEHAVIORAL_BRONZE_OUTPUT_PATH", DEFAULT_BRONZE_BEHAVIORAL_PATH)
+def _safe_unpersist(dataframe: Optional[DataFrame]) -> None:
+    if dataframe is not None:
+        try:
+            dataframe.unpersist()
+        except Exception:
+            logger.debug("Unable to unpersist DataFrame", exc_info=True)
 
 
-def seed_dim_date_if_needed(spark) -> None:
-    dim_date_table = qualified_table("dim_date")
-    if spark.table(dim_date_table).count() > 0:
-        return
-    seed_df = build_dim_date_seed(spark, DIM_DATE_SEED_START, DIM_DATE_SEED_END)
-    seed_df.writeTo(dim_date_table).append()
-
-
-def merge_into(spark, target_table: str, updates_df, merge_keys: list) -> int:
-    """
-    Idempotent Iceberg MERGE INTO. Returns source row count. Skips if
-    empty. updates_df column names must match the target table schema.
-    """
-    source_count = updates_df.count()
-    if source_count == 0:
-        return 0
-
-    temp_view = "_silver_merge_source"
-    updates_df.createOrReplaceTempView(temp_view)
-
-    on_clause = " AND ".join(f"target.{k} = source.{k}" for k in merge_keys)
-    spark.sql(
-        f"""
-        MERGE INTO {target_table} AS target
-        USING {temp_view} AS source
-        ON {on_clause}
-        WHEN MATCHED THEN UPDATE SET *
-        WHEN NOT MATCHED THEN INSERT *
-        """
+def _assert_batch_fact_contract(fact_df: DataFrame) -> None:
+    if fact_df.filter(F.col("event_key").isNull()).limit(1).count():
+        raise RuntimeError("Fact builder produced a null event_key.")
+    if fact_df.filter(F.col("event_timestamp").isNull()).limit(1).count():
+        raise RuntimeError("Fact builder produced a null event_timestamp.")
+    duplicate = (
+        fact_df.groupBy("event_key")
+        .count()
+        .filter(F.col("count") > 1)
+        .limit(1)
+        .count()
     )
-    return source_count
+    if duplicate:
+        raise RuntimeError("Fact builder produced duplicate event_key values.")
+
+
+def _assert_fact_write_contract(
+    spark: SparkSession,
+    fact_table: str,
+    source_fact_df: DataFrame,
+) -> None:
+    """Verify the keys written by this batch, without scanning unrelated facts."""
+
+    source_keys = source_fact_df.select("event_key").distinct()
+    target_keys = spark.table(fact_table).select("event_key")
+
+    missing = source_keys.join(target_keys, "event_key", "left_anti").limit(1).count()
+    if missing:
+        raise RuntimeError("At least one source event_key is missing after Iceberg MERGE.")
+
+    duplicate = (
+        target_keys.join(source_keys, "event_key", "inner")
+        .groupBy("event_key")
+        .count()
+        .filter(F.col("count") > 1)
+        .limit(1)
+        .count()
+    )
+    if duplicate:
+        raise RuntimeError(
+            "Iceberg fact contains duplicate rows for a key touched by this batch."
+        )
 
 
 def run_silver_behavioral_job(execution_date: date) -> None:
-    spark = create_iceberg_spark_session(app_name="silver-behavioral-etl")
-
-    print(f"\n=== Silver behavioral job (Step 3) for {execution_date} ===\n")
-
-    ensure_silver_behavioral_tables(spark)
-    seed_dim_date_if_needed(spark)
-    print("Tables ensured; dim_date seeded.")
-
-    bronze_df = read_bronze_behavioral_partition(
-        spark=spark,
-        bronze_path=get_bronze_behavioral_path(),
-        execution_date=execution_date,
+    config = BehavioralRuntimeConfig.from_env()
+    spark = create_silver_behavioral_spark_session(
+        app_name=f"silver-behavioral-{execution_date.isoformat()}",
+        config=config,
     )
-    raw_count = bronze_df.count()
-    print(f"Bronze rows read: {raw_count}")
 
-    if raw_count == 0:
-        print("No Bronze data for this date. Nothing to do.")
+    processable_df = None
+    rejected_df = None
+    clean_df = None
+    enriched_df = None
+    quality_df = None
+    fact_df = None
+
+    try:
+        ensure_behavioral_tables(spark, config)
+        write_pipeline_state(spark, config, execution_date, "RUNNING")
+        pipeline_run_id = run_key_for(execution_date)
+
+        bronze_df = read_bronze_behavioral_partition(
+            spark=spark,
+            execution_date=execution_date,
+            pipeline_run_id=pipeline_run_id,
+            config=config,
+        )
+        raw_count = bronze_df.count()
+        if raw_count == 0:
+            logger.warning("Bronze partition is empty for %s", execution_date)
+            write_pipeline_state(
+                spark,
+                config,
+                execution_date,
+                "EMPTY",
+                raw_count=0,
+                valid_count=0,
+                warning_count=0,
+                processable_count=0,
+                rejected_count=0,
+                fact_rows_merged=0,
+            )
+            return
+
+        validation = validate_behavioral_data(bronze_df)
+        processable_df = validation.processable_df.cache()
+        rejected_df = validation.rejected_df.cache()
+        quality_df = validation.quality_issues_df.cache()
+
+        processable_count = processable_df.count()
+        valid_count = processable_df.filter(
+            F.size("validation_warnings") == 0
+        ).count()
+        warning_count = processable_count - valid_count
+        rejected_count = rejected_df.count()
+
+        if processable_count + rejected_count != raw_count:
+            raise RuntimeError(
+                "Validation split changed the input grain: "
+                f"raw={raw_count}, processable={processable_count}, "
+                f"rejected={rejected_count}."
+            )
+
+        quality_written = write_behavioral_quality_issues(
+            spark,
+            quality_df,
+            config,
+        )
+        quarantine_written = write_behavioral_quarantine(
+            spark,
+            rejected_df,
+            config,
+        )
+        _safe_unpersist(quality_df)
+        quality_df = None
+        logger.info(
+            "Validation raw=%s valid=%s warning_records=%s processable=%s "
+            "rejected=%s quality_issues=%s quarantine=%s",
+            raw_count,
+            valid_count,
+            warning_count,
+            processable_count,
+            rejected_count,
+            quality_written,
+            quarantine_written,
+        )
+
+        if processable_count == 0:
+            write_pipeline_state(
+                spark,
+                config,
+                execution_date,
+                "SUCCEEDED",
+                raw_count=raw_count,
+                valid_count=valid_count,
+                warning_count=warning_count,
+                processable_count=0,
+                rejected_count=rejected_count,
+                fact_rows_merged=0,
+            )
+            return
+
+        clean_df = clean_behavioral_data(processable_df).cache()
+        enriched_df = add_dimension_keys(clean_df)
+        enriched_df = resolve_shared_user_keys(spark, enriched_df, config).cache()
+        enriched_count = enriched_df.count()
+        if enriched_count != processable_count:
+            raise RuntimeError(
+                "Shared-dimension enrichment changed the event grain: "
+                f"processable={processable_count}, enriched={enriched_count}."
+            )
+
+        devices = merge_dataframe(
+            spark,
+            config.qualified_table(TABLE_DIM_DEVICE),
+            build_dim_device_updates(enriched_df),
+            merge_keys=("device_key",),
+            strategy=MergeStrategy.UPSERT_PRESERVE_BOUNDS,
+            protected_columns=("device_key",),
+            min_columns=("first_seen_at",),
+            max_columns=("last_seen_at",),
+        )
+        event_types = merge_dataframe(
+            spark,
+            config.qualified_table(TABLE_DIM_EVENT_TYPE),
+            build_dim_event_type_updates(enriched_df),
+            merge_keys=("event_type_key",),
+            strategy=MergeStrategy.UPSERT_PRESERVE_BOUNDS,
+            protected_columns=("event_type_key",),
+            min_columns=("first_seen_at",),
+            max_columns=("last_seen_at",),
+        )
+
+        fact_df = build_fact_behavioral_events(enriched_df).cache()
+        _assert_batch_fact_contract(fact_df)
+        fact_table = config.qualified_table(TABLE_FACT_EVENTS)
+        facts = merge_dataframe(
+            spark,
+            fact_table,
+            fact_df,
+            merge_keys=("event_key",),
+            strategy=MergeStrategy.FACT_DEDUPLICATE_INSERT,
+        )
+        _assert_fact_write_contract(spark, fact_table, fact_df)
+
+        sessions = merge_dataframe(
+            spark,
+            config.qualified_table(TABLE_DIM_SESSION),
+            recompute_dim_session(
+                spark,
+                fact_table,
+                fact_df.select("session_key").distinct(),
+            ),
+            merge_keys=("session_key",),
+            strategy=MergeStrategy.UPSERT_ALL,
+            protected_columns=("session_key",),
+        )
+        _safe_unpersist(fact_df)
+        fact_df = None
+
+        logger.info(
+            "Behavioral writes: devices=%s event_types=%s facts=%s sessions=%s",
+            devices,
+            event_types,
+            facts,
+            sessions,
+        )
+
+        write_pipeline_state(
+            spark,
+            config,
+            execution_date,
+            "SUCCEEDED",
+            raw_count=raw_count,
+            valid_count=valid_count,
+            warning_count=warning_count,
+            processable_count=processable_count,
+            rejected_count=rejected_count,
+            fact_rows_merged=facts,
+        )
+        logger.info("Silver Behavioral completed successfully for %s", execution_date)
+
+    except Exception as exc:
+        logger.exception("Silver Behavioral failed for %s", execution_date)
+        try:
+            write_pipeline_state(
+                spark,
+                config,
+                execution_date,
+                "FAILED",
+                error_message=str(exc)[:4000],
+            )
+        except Exception:
+            logger.exception("Could not persist FAILED pipeline state")
+        raise
+    finally:
+        _safe_unpersist(fact_df)
+        _safe_unpersist(quality_df)
+        _safe_unpersist(enriched_df)
+        _safe_unpersist(clean_df)
+        _safe_unpersist(processable_df)
+        _safe_unpersist(rejected_df)
         spark.stop()
-        return
-
-    deduped_df = deduplicate_events(bronze_df)
-    valid_df, invalid_df = split_valid_invalid(deduped_df)
-
-    # DQ-flagged valid rows are reused by the fact build + dim recompute,
-    # so cache to avoid recomputing the Bronze read/split three times.
-    valid_flagged_df = apply_silver_data_quality(valid_df).cache()
-    valid_count = valid_flagged_df.count()  # materializes the cache
-    print(f"Valid rows: {valid_count}   Invalid rows: {invalid_df.count()}")
-
-    # --- quarantine (invalid rows) ---
-    q_written = merge_into(
-        spark,
-        target_table=qualified_table("behavioral_events_quarantine"),
-        updates_df=build_quarantine_rows(invalid_df),
-        merge_keys=["kafka_partition", "kafka_offset"],
-    )
-    print(f"Quarantine rows merged: {q_written}")
-
-    # --- lookup dimensions ---
-    d_dev = merge_into(
-        spark,
-        target_table=qualified_table("dim_device"),
-        updates_df=build_dim_device_updates(valid_flagged_df),
-        merge_keys=["device_key"],
-    )
-    d_evt = merge_into(
-        spark,
-        target_table=qualified_table("dim_event_type"),
-        updates_df=build_dim_event_type_updates(valid_flagged_df),
-        merge_keys=["event_type_key"],
-    )
-    print(f"dim_device upserted: {d_dev}   dim_event_type upserted: {d_evt}")
-
-    # --- fact table (idempotent upsert by natural event_key) ---
-    fact_table = qualified_table("fact_behavioral_events")
-    f_written = merge_into(
-        spark,
-        target_table=fact_table,
-        updates_df=build_fact_behavioral_events(valid_flagged_df),
-        merge_keys=["event_key"],
-    )
-    print(f"fact_behavioral_events upserted: {f_written}")
-
-    # --- dim_user / dim_session recompute (from fact, touched entities) ---
-    touched_user_ids = valid_flagged_df.select("user_id").distinct()
-    touched_session_ids = valid_flagged_df.select("session_id").distinct()
-
-    u_written = merge_into(
-        spark,
-        target_table=qualified_table("dim_user"),
-        updates_df=recompute_dim_user(spark, fact_table, touched_user_ids),
-        merge_keys=["user_key"],
-    )
-    s_written = merge_into(
-        spark,
-        target_table=qualified_table("dim_session"),
-        updates_df=recompute_dim_session(spark, fact_table, touched_session_ids),
-        merge_keys=["session_key"],
-    )
-    print(f"dim_user upserted: {u_written}   dim_session upserted: {s_written}")
-
-    valid_flagged_df.unpersist()
-
-    # --- final table counts ---
-    print("\nCurrent Silver table row counts:")
-    for table in [
-        "dim_date", "dim_user", "dim_device", "dim_event_type",
-        "dim_session", "fact_behavioral_events", "behavioral_events_quarantine",
-    ]:
-        full = qualified_table(table)
-        print(f"  {full}: {spark.table(full).count()}")
-
-    print("\n=== Step 3 finished OK ===")
-    spark.stop()
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Run Silver behavioral batch ETL job")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run Silver Behavioral batch ETL")
     parser.add_argument(
         "--execution-date",
-        type=str,
         required=True,
-        help="Date (YYYY-MM-DD) of the Bronze partition to process.",
+        help="Bronze partition date in YYYY-MM-DD format.",
     )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    exec_date = datetime.strptime(args.execution_date, "%Y-%m-%d").date()
-    run_silver_behavioral_job(execution_date=exec_date)
+    run_silver_behavioral_job(
+        datetime.strptime(args.execution_date, "%Y-%m-%d").date()
+    )

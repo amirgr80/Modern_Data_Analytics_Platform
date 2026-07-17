@@ -1,102 +1,97 @@
+"""Airflow DAG for the independent Silver Behavioral job."""
+
 from __future__ import annotations
 
 import os
+import sys
 
 import pendulum
-
 from airflow import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.python import PythonOperator
 
 
-TEHRAN_TZ = pendulum.timezone("Asia/Tehran")
+SRC_PATH = os.getenv("PIPELINE_SRC_PATH", "/opt/airflow/src")
+if SRC_PATH not in sys.path:
+    sys.path.insert(0, SRC_PATH)
 
-# Same package set we pass on the command line when running the job by
-# hand. spark-submit downloads these from Maven on first run (cached
-# afterwards for the life of the worker container).
-SPARK_PACKAGES = ",".join(
-    [
-        "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3",
-        "org.apache.spark:spark-avro_2.12:3.5.3",
-        "org.apache.hadoop:hadoop-aws:3.3.4",
-        "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.1",
-    ]
+from common.silver_behavioral_config import spark_packages_csv
+
+
+TEHRAN_TZ = pendulum.timezone("Asia/Tehran")
+SILVER_JOB_PATH = "/opt/airflow/src/jobs/silver_behavioral_job.py"
+SPARK_PACKAGES = spark_packages_csv()
+
+# Scheduled runs process the date at the beginning of their data interval.
+# Manual runs may pass {"execution_date": "YYYY-MM-DD"} in dag_run.conf.
+PROCESS_DATE_TEMPLATE = (
+    "{{ dag_run.conf.get('execution_date', "
+    "data_interval_start.in_timezone('Asia/Tehran').to_date_string()) }}"
 )
 
-# Path to the job as mounted inside the Airflow containers
-# (./src -> /opt/airflow/src in docker-compose.yml).
-SILVER_JOB_PATH = "/opt/airflow/src/jobs/silver_behavioral_job.py"
+
+def check_bronze_partition_exists(execution_date: str) -> None:
+    import boto3
+
+    year, month, day = (int(value) for value in execution_date.split("-"))
+    bucket = os.getenv("MINIO_BRONZE_BUCKET", "bronze")
+    prefix = f"behavioral/events/year={year}/month={month}/day={day}/"
+    client = boto3.client(
+        "s3",
+        endpoint_url=os.getenv("MINIO_ENDPOINT", "http://minio:9000"),
+        aws_access_key_id=os.getenv("MINIO_ACCESS_KEY") or os.getenv("MINIO_ROOT_USER"),
+        aws_secret_access_key=(
+            os.getenv("MINIO_SECRET_KEY") or os.getenv("MINIO_ROOT_PASSWORD")
+        ),
+        region_name=os.getenv("AWS_REGION", "us-east-1"),
+    )
+    response = client.list_objects_v2(Bucket=bucket, Prefix=prefix, MaxKeys=1)
+    if response.get("KeyCount", 0) == 0:
+        raise FileNotFoundError(f"No Bronze Behavioral objects at s3://{bucket}/{prefix}")
 
 
-# Retry mechanism is an explicit project evaluation criterion, so it's
-# set at the DAG level here (3 attempts, 5 min apart).
 default_args = {
-    "owner": "team5",
+    "owner": "silver-behavioral",
     "depends_on_past": False,
     "retries": 3,
     "retry_delay": pendulum.duration(minutes=5),
+    "execution_timeout": pendulum.duration(hours=2),
 }
 
-
-def check_bronze_partition_exists(**context) -> None:
-    """
-    Fail fast with a clear message if the Bronze behavioral partition for
-    this run's date doesn't exist yet, instead of letting the Spark job
-    fail deep inside a read with a less obvious error.
-    """
-    import boto3
-
-    ds = context["ds"]  # 'YYYY-MM-DD'
-    year, month, day = (int(part) for part in ds.split("-"))
-
-    bucket = os.getenv("MINIO_BRONZE_BUCKET", "bronze")
-    prefix = f"behavioral/events/year={year}/month={month}/day={day}/"
-
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=os.getenv("MINIO_ENDPOINT", "http://minio:9000"),
-        aws_access_key_id=os.getenv("MINIO_ACCESS_KEY"),
-        aws_secret_access_key=os.getenv("MINIO_SECRET_KEY"),
-    )
-
-    response = s3.list_objects_v2(Bucket=bucket, Prefix=prefix, MaxKeys=1)
-    if response.get("KeyCount", 0) == 0:
-        raise FileNotFoundError(
-            f"No Bronze behavioral data at s3://{bucket}/{prefix} for {ds}. "
-            "Is the Bronze streaming job producing data?"
-        )
-
-
 with DAG(
-    dag_id="silver_behavioral_etl",
-    description="Bronze -> Silver batch ETL for behavioral events (star schema on Iceberg)",
+    dag_id="silver_behavioral_etl_v2",
+    description="Independent Bronze -> Iceberg Silver Behavioral ETL",
     default_args=default_args,
-    schedule="0 2 * * *",  # 02:00 Tehran, after the day's Bronze data has landed
+    schedule="0 2 * * *",
     start_date=pendulum.datetime(2026, 1, 1, tz=TEHRAN_TZ),
     catchup=False,
     max_active_runs=1,
-    tags=["silver", "behavioral", "team5"],
+    tags=["silver", "behavioral", "iceberg"],
 ) as dag:
-
-    check_bronze_partition = PythonOperator(
-        task_id="check_bronze_partition_exists",
+    check_partition = PythonOperator(
+        task_id="check_behavioral_bronze_partition",
         python_callable=check_bronze_partition_exists,
+        op_kwargs={"execution_date": PROCESS_DATE_TEMPLATE},
     )
 
-    run_silver_job = BashOperator(
-        task_id="run_silver_behavioral_job",
-        # SPARK_MASTER_URL=local[*] makes create_iceberg_spark_session build
-        # a local session (the code reads that env var), so the job runs
-        # in-process in the Airflow worker -- no Spark-cluster networking.
+    run_job = BashOperator(
+        task_id="run_silver_behavioral_job_v2",
+        append_env=True,
+        env={
+            "BEHAVIORAL_SPARK_MASTER_URL": "spark://spark-master:7077",
+            "BEHAVIORAL_ICEBERG_REST_URI": "http://lakekeeper:8181/catalog",
+            "BEHAVIORAL_ICEBERG_WAREHOUSE": "warehouse",
+            "BEHAVIORAL_ICEBERG_NAMESPACE": "silver_behavioral",
+            "BEHAVIORAL_QUALITY_NAMESPACE": "silver_behavioral_quality",
+        },
         bash_command=(
-            "SPARK_MASTER_URL='local[*]' "
-            "ICEBERG_REST_URI='http://lakekeeper:8181/catalog' "
-            "ICEBERG_WAREHOUSE='warehouse' "
-            "spark-submit --master 'local[*]' "
-            f"--packages {SPARK_PACKAGES} "
-            f"{SILVER_JOB_PATH} "
-            "--execution-date {{ ds }}"
+            "set -euo pipefail; "
+            "spark-submit "
+            "--master 'spark://spark-master:7077' "
+            f"--packages '{SPARK_PACKAGES}' "
+            f"'{SILVER_JOB_PATH}' "
+            f"--execution-date '{PROCESS_DATE_TEMPLATE}'"
         ),
     )
 
-    check_bronze_partition >> run_silver_job
+    check_partition >> run_job
