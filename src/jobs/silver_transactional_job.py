@@ -74,6 +74,7 @@ def process_table(
     result = validate_transactional_data(
         bronze_df,
         table_name,
+        partition_dates=["20260712"],
     )
 
     valid_df = result.valid_df.persist()
