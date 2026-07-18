@@ -29,18 +29,18 @@ from common.silver_transactional_iceberg_writer import (
 
 logging.basicConfig(
     level=logging.INFO,
-    format=\"%(asctime)s | %(levelname)s | %(name)s | %(message)s\",
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger(__name__)
 
 
 TABLES = [
-    \"categories\",
-    \"users\",
-    \"products\",
-    \"orders\",
-    \"order_items\",
-    \"product_price_history\",
+    "categories",
+    "users",
+    "products",
+    "orders",
+    "order_items",
+    "product_price_history",
 ]
 
 
@@ -49,32 +49,32 @@ def process_table(
     table_name: str,
     silver_bucket: str,
 ) -> DataFrame:
-    logger.info(\"=\" * 60)
-    logger.info(\"Processing table: %s\", table_name)
+    logger.info("=" * 60)
+    logger.info("Processing table: %s", table_name)
 
-    logger.info(\"Reading Bronze data for: %s\", table_name)
+    logger.info("Reading Bronze data for: %s", table_name)
     bronze_df = read_bronze_transactional_table(
         spark,
         table_name,
-        partition_dates=[\"20260712\"],  # فقط اینجا پارتیشن می‌دهیم
+        partition_dates=["20260712"],
     )
 
     if bronze_df.isEmpty():
         raise RuntimeError(
-            f\"No Bronze data found for required table: {table_name}\"
+            f"No Bronze data found for required table: {table_name}"
         )
 
     bronze_count = bronze_df.count()
     logger.info(
-        \"Read %s records from Bronze for %s\",
+        "Read %s records from Bronze for %s",
         bronze_count,
         table_name,
     )
 
-    logger.info(\"Validating table: %s\", table_name)
+    logger.info("Validating table: %s", table_name)
     result = validate_transactional_data(
         bronze_df,
-        table_name,  # بدون پارتیشن
+        table_name,
     )
 
     valid_df = result.valid_df.persist()
@@ -85,7 +85,7 @@ def process_table(
     issues_count = quality_issues_df.count()
 
     logger.info(
-        \"Validation result for %s | valid=%s rejected=%s issues=%s\",
+        "Validation result for %s | valid=%s rejected=%s issues=%s",
         table_name,
         valid_count,
         rejected_count,
@@ -94,7 +94,7 @@ def process_table(
 
     if issues_count > 0:
         logger.info(
-            \"Writing quality issues for: %s\",
+            "Writing quality issues for: %s",
             table_name,
         )
         write_transactional_quality_issues(
@@ -106,10 +106,10 @@ def process_table(
     if valid_count == 0:
         valid_df.unpersist()
         raise RuntimeError(
-            f\"No valid records remain for required table: {table_name}\"
+            f"No valid records remain for required table: {table_name}"
         )
 
-    logger.info(\"Cleaning table: %s\", table_name)
+    logger.info("Cleaning table: %s", table_name)
     cleaned_df = clean_transactional_data(
         valid_df,
         table_name,
@@ -119,23 +119,23 @@ def process_table(
     valid_df.unpersist()
 
     silver_path = (
-        f\"s3a://{silver_bucket}/transactional/{table_name}/\"
+        f"s3a://{silver_bucket}/transactional/{table_name}/"
     )
     logger.info(
-        \"Writing %s cleaned records to: %s\",
+        "Writing %s cleaned records to: %s",
         cleaned_count,
         silver_path,
     )
 
     (
         cleaned_df.write
-        .mode(\"overwrite\")
-        .format(\"parquet\")
+        .mode("overwrite")
+        .format("parquet")
         .save(silver_path)
     )
 
     logger.info(
-        \"Successfully processed table: %s\",
+        "Successfully processed table: %s",
         table_name,
     )
 
@@ -144,29 +144,29 @@ def process_table(
 
 def main() -> None:
     spark = create_iceberg_spark_session(
-        app_name=\"SilverTransactionalJob\",
+        app_name="SilverTransactionalJob",
     )
-    spark.sparkContext.setLogLevel(\"WARN\")
+    spark.sparkContext.setLogLevel("WARN")
 
     silver_bucket = os.getenv(
-        \"MINIO_BUCKET_SILVER\",
-        \"silver\",
+        "MINIO_BUCKET_SILVER",
+        "silver",
     )
     catalog = os.getenv(
-        \"ICEBERG_CATALOG_NAME\",
-        \"lakekeeper\",
+        "ICEBERG_CATALOG_NAME",
+        "lakekeeper",
     )
     namespace = os.getenv(
-        \"SILVER_NAMESPACE\",
-        \"silver\",
+        "SILVER_NAMESPACE",
+        "silver",
     )
     dim_date_start = os.getenv(
-        \"DIM_DATE_START\",
-        \"2020-01-01\",
+        "DIM_DATE_START",
+        "2020-01-01",
     )
     dim_date_end = os.getenv(
-        \"DIM_DATE_END\",
-        \"2035-12-31\",
+        "DIM_DATE_END",
+        "2035-12-31",
     )
 
     cleaned_tables: dict[str, DataFrame] = {}
@@ -181,7 +181,7 @@ def main() -> None:
                 )
             except Exception as exc:
                 logger.error(
-                    \"Failed to process table %s: %s\",
+                    "Failed to process table %s: %s",
                     table_name,
                     str(exc),
                 )
@@ -194,12 +194,12 @@ def main() -> None:
         ]
         if missing_tables:
             raise RuntimeError(
-                \"Kimball build was not started because these required \"
-                f\"tables failed or were empty: {missing_tables}\"
+                "Kimball build was not started because these required "
+                f"tables failed or were empty: {missing_tables}"
             )
 
-        logger.info(\"=\" * 60)
-        logger.info(\"Building Kimball dimensions and facts.\")
+        logger.info("=" * 60)
+        logger.info("Building Kimball dimensions and facts.")
 
         kimball_tables = build_all_kimball_tables(
             users_df=cleaned_tables.get('users'),
@@ -213,7 +213,7 @@ def main() -> None:
         )
 
         logger.info(
-            \"Writing Kimball tables to %s.%s\",
+            "Writing Kimball tables to %s.%s",
             catalog,
             namespace,
         )
@@ -225,14 +225,14 @@ def main() -> None:
         )
         writer.write_all(kimball_tables)
 
-        logger.info(\"=\" * 60)
+        logger.info("=" * 60)
         logger.info(
-            \"Silver Transactional Job completed successfully.\"
+            "Silver Transactional Job completed successfully."
         )
 
     except Exception:
         logger.exception(
-            \"Silver Transactional Job failed.\"
+            "Silver Transactional Job failed."
         )
         raise
 
@@ -244,8 +244,8 @@ def main() -> None:
                 pass
 
         spark.stop()
-        logger.info(\"SparkSession stopped.\")
+        logger.info("SparkSession stopped.")
 
 
-if __name__ == \"__main__\":
+if __name__ == "__main__":
     main()
