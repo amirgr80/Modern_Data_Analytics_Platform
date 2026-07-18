@@ -213,7 +213,7 @@ def build_warning_rules(table_name: str) -> list:
 
 def build_quality_issues(validated_df: DataFrame, table_name: str) -> DataFrame:
     record_id_field = RECORD_ID_FIELDS[table_name]
-    
+
     return (
         validated_df
         .filter((F.size("validation_errors") > 0) | (F.size("validation_warnings") > 0))
@@ -227,12 +227,13 @@ def build_quality_issues(validated_df: DataFrame, table_name: str) -> DataFrame:
             F.col("validation_warnings"),
             F.col("_timestamp_repair_reason").alias("repair_description"),
             F.col("_original_record").alias("original_record"),
-            F.lit(None).cast("string").alias("_source_file"),
-            F.lit(None).cast("string").alias("_kafka_topic"),
-            F.lit(None).cast("int").alias("_kafka_partition"),
-            F.lit(None).cast("bigint").alias("_kafka_offset"),
-            F.lit(None).cast("timestamp").alias("_kafka_timestamp"),
-            F.lit(None).cast("timestamp").alias("bronze_ingestion_timestamp"),
+            # ستون‌های واقعی از validated_df
+            F.col("_source_file"),
+            F.col("_kafka_topic"),
+            F.col("_kafka_partition"),
+            F.col("_kafka_offset"),
+            F.col("_kafka_timestamp"),
+            F.col("bronze_ingestion_timestamp"),
             F.current_timestamp().alias("detected_at")
         )
     )
