@@ -1,3 +1,4 @@
+
 import logging
 import os
 import traceback
@@ -20,10 +21,10 @@ from common.silver_transactional_quality_writer import (
     write_transactional_quality_issues,
 )
 from common.silver_transactional_kimball import (
-    build_all_kimball_tables,
+    build_kimball_tables,
 )
 from common.silver_transactional_iceberg_writer import (
-    SilverTransactionalIcebergWriter,
+    write_kimball_tables,
 )
 
 
@@ -47,8 +48,13 @@ TABLES = [
 def process_table(
     spark: SparkSession,
     table_name: str,
-    silver_bucket: str,
 ) -> DataFrame:
+    """
+    Read, validate and clean one required Bronze transactional table.
+
+    The cleaned DataFrame remains in Spark and is passed directly to the
+    Kimball builder. It is not written as a separate Parquet copy.
+    """
     logger.info("=" * 60)
     logger.info("Processing table: %s", table_name)
 
@@ -56,7 +62,6 @@ def process_table(
     bronze_df = read_bronze_transactional_table(
         spark,
         table_name,
-        partition_dates=["20260712"],
     )
 
     if bronze_df.isEmpty():
@@ -118,20 +123,10 @@ def process_table(
     cleaned_count = cleaned_df.count()
     valid_df.unpersist()
 
-    silver_path = (
-        f"s3a://{silver_bucket}/transactional/{table_name}/"
-    )
     logger.info(
-        "Writing %s cleaned records to: %s",
+        "Cleaning completed for %s | cleaned=%s",
+        table_name,
         cleaned_count,
-        silver_path,
-    )
-
-    (
-        cleaned_df.write
-        .mode("overwrite")
-        .format("parquet")
-        .save(silver_path)
     )
 
     logger.info(
@@ -148,17 +143,13 @@ def main() -> None:
     )
     spark.sparkContext.setLogLevel("WARN")
 
-    silver_bucket = os.getenv(
-        "MINIO_BUCKET_SILVER",
-        "silver",
-    )
     catalog = os.getenv(
         "ICEBERG_CATALOG_NAME",
         "lakekeeper",
     )
     namespace = os.getenv(
-        "SILVER_NAMESPACE",
-        "silver",
+        "SILVER_TRANSACTIONAL_NAMESPACE",
+        "silver_transactional",
     )
     dim_date_start = os.getenv(
         "DIM_DATE_START",
@@ -177,7 +168,6 @@ def main() -> None:
                 cleaned_tables[table_name] = process_table(
                     spark=spark,
                     table_name=table_name,
-                    silver_bucket=silver_bucket,
                 )
             except Exception as exc:
                 logger.error(
@@ -201,13 +191,9 @@ def main() -> None:
         logger.info("=" * 60)
         logger.info("Building Kimball dimensions and facts.")
 
-        kimball_tables = build_all_kimball_tables(
-            users_df=cleaned_tables.get('users'),
-            categories_df=cleaned_tables.get('categories'),
-            products_df=cleaned_tables.get('products'),
-            orders_df=cleaned_tables.get('orders'),
-            order_items_df=cleaned_tables.get('order_items'),
-            product_price_history_df=cleaned_tables.get('product_price_history'),
+        kimball_tables = build_kimball_tables(
+            spark=spark,
+            cleaned_tables=cleaned_tables,
             dim_date_start=dim_date_start,
             dim_date_end=dim_date_end,
         )
@@ -218,12 +204,12 @@ def main() -> None:
             namespace,
         )
 
-        writer = SilverTransactionalIcebergWriter(
+        write_kimball_tables(
             spark=spark,
+            kimball_tables=kimball_tables,
             catalog=catalog,
             namespace=namespace,
         )
-        writer.write_all(kimball_tables)
 
         logger.info("=" * 60)
         logger.info(
