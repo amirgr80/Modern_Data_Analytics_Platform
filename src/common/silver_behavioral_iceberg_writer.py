@@ -161,58 +161,80 @@ def merge_dataframe(
     """Merge one DataFrame into an Iceberg table and return source row count."""
 
     aligned_df = align_to_target_schema(spark, target_table, source_df)
-    source_count = aligned_df.count()
-    if source_count == 0:
-        return 0
 
-    assert_unique_source_keys(aligned_df, merge_keys)
+    # Iceberg MERGE rejects non-deterministic source plans such as
+    # current_timestamp(). Materialize once so every downstream action and
+    # the MERGE statement observe the same stable source rows.
+    materialized_df = aligned_df.localCheckpoint(eager=True)
 
-    view_name = f"_behavioral_merge_{uuid4().hex}"
-    aligned_df.createOrReplaceTempView(view_name)
-    columns = aligned_df.columns
-    on_clause = " AND ".join(
-        f"{_column_ref('target', key)} = {_column_ref('source', key)}"
-        for key in merge_keys
-    )
-    insert_clause = _render_insert(columns)
-
-    if strategy in {
-        MergeStrategy.INSERT_ONLY,
-        MergeStrategy.FACT_DEDUPLICATE_INSERT,
-    }:
-        matched_clause = ""
-    elif strategy in {
-        MergeStrategy.UPSERT_ALL,
-        MergeStrategy.UPSERT_PRESERVE_BOUNDS,
-    }:
-        assignments = _render_update_assignments(
-            columns=columns,
-            merge_keys=merge_keys,
-            protected_columns=protected_columns,
-            min_columns=min_columns if strategy == MergeStrategy.UPSERT_PRESERVE_BOUNDS else (),
-            max_columns=max_columns if strategy == MergeStrategy.UPSERT_PRESERVE_BOUNDS else (),
-            custom_updates=custom_updates,
-        )
-        if not assignments:
-            matched_clause = ""
-        else:
-            matched_clause = f"WHEN MATCHED THEN UPDATE SET\n                    {assignments}"
-    else:  # pragma: no cover - defensive for future enum values
-        raise ValueError(f"Unsupported merge strategy: {strategy}")
-
-    sql = f"""
-        MERGE INTO {target_table} AS target
-        USING {view_name} AS source
-        ON {on_clause}
-        {matched_clause}
-        WHEN NOT MATCHED THEN {insert_clause}
-    """
-    logger.debug("Iceberg merge SQL for %s:\n%s", target_table, sql)
     try:
-        spark.sql(sql)
+        source_count = materialized_df.count()
+        if source_count == 0:
+            return 0
+
+        assert_unique_source_keys(materialized_df, merge_keys)
+
+        view_name = f"_behavioral_merge_{uuid4().hex}"
+        columns = materialized_df.columns
+        on_clause = " AND ".join(
+            f"{_column_ref('target', key)} = {_column_ref('source', key)}"
+            for key in merge_keys
+        )
+        insert_clause = _render_insert(columns)
+
+        if strategy in {
+            MergeStrategy.INSERT_ONLY,
+            MergeStrategy.FACT_DEDUPLICATE_INSERT,
+        }:
+            matched_clause = ""
+        elif strategy in {
+            MergeStrategy.UPSERT_ALL,
+            MergeStrategy.UPSERT_PRESERVE_BOUNDS,
+        }:
+            assignments = _render_update_assignments(
+                columns=columns,
+                merge_keys=merge_keys,
+                protected_columns=protected_columns,
+                min_columns=(
+                    min_columns
+                    if strategy == MergeStrategy.UPSERT_PRESERVE_BOUNDS
+                    else ()
+                ),
+                max_columns=(
+                    max_columns
+                    if strategy == MergeStrategy.UPSERT_PRESERVE_BOUNDS
+                    else ()
+                ),
+                custom_updates=custom_updates,
+            )
+            if not assignments:
+                matched_clause = ""
+            else:
+                matched_clause = (
+                    "WHEN MATCHED THEN UPDATE SET\n"
+                    f"                    {assignments}"
+                )
+        else:  # pragma: no cover - defensive for future enum values
+            raise ValueError(f"Unsupported merge strategy: {strategy}")
+
+        sql = f"""
+            MERGE INTO {target_table} AS target
+            USING {view_name} AS source
+            ON {on_clause}
+            {matched_clause}
+            WHEN NOT MATCHED THEN {insert_clause}
+        """
+        logger.debug("Iceberg merge SQL for %s:\n%s", target_table, sql)
+
+        materialized_df.createOrReplaceTempView(view_name)
+        try:
+            spark.sql(sql)
+        finally:
+            spark.catalog.dropTempView(view_name)
+
+        return source_count
     finally:
-        spark.catalog.dropTempView(view_name)
-    return source_count
+        materialized_df.unpersist(blocking=False)
 
 
 def table_exists(spark: SparkSession, qualified_name: str) -> bool:
