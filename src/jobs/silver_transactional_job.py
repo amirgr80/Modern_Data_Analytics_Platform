@@ -1,3 +1,4 @@
+
 import logging
 import os
 import traceback
@@ -20,10 +21,10 @@ from common.silver_transactional_quality_writer import (
     write_transactional_quality_issues,
 )
 from common.silver_transactional_kimball import (
-    build_all_kimball_tables,
+    build_kimball_tables,
 )
 from common.silver_transactional_iceberg_writer import (
-    SilverTransactionalIcebergWriter,
+    write_kimball_tables,
 )
 
 
@@ -47,16 +48,29 @@ TABLES = [
 def process_table(
     spark: SparkSession,
     table_name: str,
-    silver_bucket: str,
 ) -> DataFrame:
+<<<<<<< HEAD
     logger.info('=' * 60)
     logger.info('Processing table: %s', table_name)
+=======
+    """
+    Read, validate and clean one required Bronze transactional table.
+
+    The cleaned DataFrame remains in Spark and is passed directly to the
+    Kimball builder. It is not written as a separate Parquet copy.
+    """
+    logger.info("=" * 60)
+    logger.info("Processing table: %s", table_name)
+>>>>>>> feature/silver-transactional
 
     logger.info('Reading Bronze data for: %s', table_name)
     bronze_df = read_bronze_transactional_table(
         spark,
         table_name,
+<<<<<<< HEAD
         partition_dates=['20260712'],  # تاریخ پارتیشن
+=======
+>>>>>>> feature/silver-transactional
     )
 
     if bronze_df.isEmpty():
@@ -118,6 +132,7 @@ def process_table(
     cleaned_count = cleaned_df.count()
     valid_df.unpersist()
 
+<<<<<<< HEAD
     # ذخیره در MinIO (Silver)
     silver_path = (
         f's3a://{silver_bucket}/transactional/{table_name}/'
@@ -133,6 +148,12 @@ def process_table(
         .mode('overwrite')
         .format('parquet')
         .save(silver_path)
+=======
+    logger.info(
+        "Cleaning completed for %s | cleaned=%s",
+        table_name,
+        cleaned_count,
+>>>>>>> feature/silver-transactional
     )
 
     logger.info(
@@ -150,17 +171,25 @@ def main() -> None:
     )
     spark.sparkContext.setLogLevel('WARN')
 
+<<<<<<< HEAD
     silver_bucket = os.getenv(
         'MINIO_BUCKET_SILVER',
         'silver',
     )
+=======
+>>>>>>> feature/silver-transactional
     catalog = os.getenv(
         'ICEBERG_CATALOG_NAME',
         'lakekeeper',
     )
     namespace = os.getenv(
+<<<<<<< HEAD
         'SILVER_NAMESPACE',
         'silver',
+=======
+        "SILVER_TRANSACTIONAL_NAMESPACE",
+        "silver_transactional",
+>>>>>>> feature/silver-transactional
     )
     dim_date_start = os.getenv(
         'DIM_DATE_START',
@@ -180,7 +209,6 @@ def main() -> None:
                 cleaned_tables[table_name] = process_table(
                     spark=spark,
                     table_name=table_name,
-                    silver_bucket=silver_bucket,
                 )
             except Exception as exc:
                 logger.error(
@@ -204,6 +232,7 @@ def main() -> None:
         logger.info('=' * 60)
         logger.info('Building Kimball dimensions and facts.')
 
+<<<<<<< HEAD
         # ساخت Kimball Tables
         kimball_tables = build_all_kimball_tables(
             users_df=cleaned_tables.get('users'),
@@ -212,6 +241,11 @@ def main() -> None:
             orders_df=cleaned_tables.get('orders'),
             order_items_df=cleaned_tables.get('order_items'),
             product_price_history_df=cleaned_tables.get('product_price_history'),
+=======
+        kimball_tables = build_kimball_tables(
+            spark=spark,
+            cleaned_tables=cleaned_tables,
+>>>>>>> feature/silver-transactional
             dim_date_start=dim_date_start,
             dim_date_end=dim_date_end,
         )
@@ -222,13 +256,17 @@ def main() -> None:
             namespace,
         )
 
+<<<<<<< HEAD
         # نوشتن در Iceberg
         writer = SilverTransactionalIcebergWriter(
+=======
+        write_kimball_tables(
+>>>>>>> feature/silver-transactional
             spark=spark,
+            kimball_tables=kimball_tables,
             catalog=catalog,
             namespace=namespace,
         )
-        writer.write_all(kimball_tables)
 
         logger.info('=' * 60)
         logger.info(
@@ -252,5 +290,10 @@ def main() -> None:
         logger.info('SparkSession stopped.')
 
 
+<<<<<<< HEAD
 if __name__ == '__main__':
     main()
+=======
+if __name__ == "__main__":
+    main()
+>>>>>>> feature/silver-transactional
