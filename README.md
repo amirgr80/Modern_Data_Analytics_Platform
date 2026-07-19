@@ -60,12 +60,13 @@ Separating them means a schema change, a bad deploy, or a data-quality incident 
 - Two **Silver** pipelines with different maturity:
   - **Silver Behavioral** — complete: Iceberg star schema over MinIO via the Lakekeeper REST catalog, idempotent MERGE writes, quarantine, data-quality tables, and an Airflow DAG.
   - **Silver Transactional** — partial: validated and cleansed Parquet output. No Iceberg tables and no Kimball model yet.
+- **Gold Behavioral** — implemented: Silver Behavioral Iceberg tables are flattened into a ClickHouse `behavioral_obt` One Big Table through a Spark job and Airflow DAG.
 - Local/VPS infrastructure for the full target stack via Docker Compose.
 - Kafka and the Schema Registry are treated as externally managed dependencies, not started by this repository.
 
 ### Current Maturity Level
 
-Active development. Bronze ingestion is implemented for both pipelines. The Silver Behavioral pipeline is production-shaped and orchestrated. The Silver Transactional pipeline cleanses data but does not yet produce dimensional tables. Gold loading and BI dashboards are not implemented — see [Section 18](#18-current-implementation-status) for a precise breakdown and [Section 21](#21-engineering-notes) for known issues.
+Active development. Bronze ingestion is implemented for both pipelines. The Silver Behavioral pipeline is production-shaped and orchestrated. The Behavioral Gold load is implemented for ClickHouse. The Silver Transactional pipeline cleanses data but does not yet produce dimensional tables, so cross-domain Gold and BI dashboards are still pending — see [Section 18](#18-current-implementation-status) for a precise breakdown and [Section 21](#21-engineering-notes) for known issues.
 
 ---
 
@@ -92,8 +93,8 @@ flowchart LR
         MINIOS[("MinIO<br/>silver/ Parquet")]
     end
 
-    subgraph GOLD[Gold Layer - Planned]
-        CH[("ClickHouse<br/>One Big Table")]
+    subgraph GOLD[Gold Layer - Behavioral Implemented]
+        CH[("ClickHouse<br/>behavioral_obt OBT")]
         MB["Metabase dashboards"]
     end
 
@@ -123,7 +124,7 @@ flowchart LR
     style GOLD fill:#2b2614,stroke:#a8862c,color:#f0e6c0
 ```
 
-Solid nodes and edges are implemented today. Dashed edges represent infrastructure that is provisioned in `docker-compose.yml` (ClickHouse, Metabase) but has no pipeline code reading from or writing to it yet.
+Solid nodes and edges are implemented today. ClickHouse now has a Behavioral Gold load path; Metabase dashboards and cross-domain Gold remain future work.
 
 **A note on the Iceberg catalog.** The Compose stack defines *two* Iceberg REST catalog services: `iceberg-rest` (tabulario 1.6.0) and `lakekeeper`. The pipeline environment (`x-pipeline-env`, `x-airflow-common-env`) points at **Lakekeeper**, which is the catalog the Silver Behavioral pipeline actually uses. See [Section 21](#21-engineering-notes).
 
@@ -148,7 +149,7 @@ Silver Layer  --  Spark batch ETL, orchestrated by Airflow
         +--> s3a://silver/transactional/<table>/   (Transactional, Parquet)
                  |
                  v
-Gold Layer  --  PLANNED (ClickHouse One Big Table -> Metabase)
+Gold Layer  --  ClickHouse behavioral_obt OBT -> Metabase-ready queries
 ```
 
 End to end, for the Behavioral stream:

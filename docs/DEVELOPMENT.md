@@ -113,24 +113,27 @@ Create in MinIO Console before writing Iceberg tables.
 
 **PDF goal:** Denormalized One Big Table (OBT) in ClickHouse for fast OLAP.
 
+Behavioral Gold is implemented in this repository as a ClickHouse OBT backed by the Behavioral Silver Iceberg model. The design notes live in [`plans/behavioral_gold_design.md`](../plans/behavioral_gold_design.md).
+
 No new MinIO buckets.
 
 ### Build
 
 | What | Where |
 |------|-------|
-| ClickHouse DDL | `sql/clickhouse/` (auto-runs on first ClickHouse start) |
-| Silver → Gold ETL | `src/gold/` |
-| Airflow DAG | `workflow/dags/` |
+| ClickHouse DDL | [`sql/clickhouse/001_behavioral_gold_obt.sql`](../sql/clickhouse/001_behavioral_gold_obt.sql) |
+| Silver → Gold ETL | [`src/jobs/gold_behavioral_job.py`](../src/jobs/gold_behavioral_job.py) + [`src/gold/`](../src/gold/) |
+| Airflow DAG | [`workflow/dags/gold_behavioral_dag.py`](../workflow/dags/gold_behavioral_dag.py) |
 
 **Requirements (from PDF):**
-- Flatten star schema into OBT
+- Flatten the Behavioral Silver star schema into an OBT
 - Optimize with sorting keys and partition keys
 - Load into ClickHouse database `lakehouse`
 
 ### Verify
 
 - [ ] Tables exist in ClickHouse
+- [ ] `sql/clickhouse/behavioral_gold_verification.sql` returns expected counts and freshness
 - [ ] Aggregation queries return results quickly
 
 ---

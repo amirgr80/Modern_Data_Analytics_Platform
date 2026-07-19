@@ -2,3 +2,4 @@ pyspark==3.5.1
 requests
 pandas
 confluent-kafka
+clickhouse-connect
