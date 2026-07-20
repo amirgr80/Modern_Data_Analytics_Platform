@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>راهنمای کامل لایهٔ Gold — از صفر</title>
+<link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet">
+<style>
+:root{
+  --bg:#0f1621; --panel:#18222f; --panel2:#1e2b3a; --border:#2c3e50;
+  --text:#e6edf3; --muted:#9fb0c0; --accent:#4aa3df; --good:#6fcf97;
+  --bad:#eb5757; --warn:#f2c94c; --code-bg:#0b1017;
+}
+*{box-sizing:border-box;}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:Vazirmatn,Tahoma,sans-serif; line-height:2; font-size:17px;
+}
+.wrap{display:flex; max-width:1400px; margin:0 auto;}
+nav{
+  position:sticky; top:0; align-self:flex-start; height:100vh; overflow-y:auto;
+  width:280px; min-width:280px; background:var(--panel); border-left:1px solid var(--border);
+  padding:24px 18px;
+}
+nav h3{color:var(--accent); font-size:0.9em; margin:18px 0 8px; border-bottom:1px solid var(--border); padding-bottom:6px;}
+nav a{display:block; color:var(--muted); text-decoration:none; font-size:0.85em; padding:5px 8px; border-radius:6px;}
+nav a:hover{background:var(--panel2); color:var(--text);}
+main{flex:1; padding:40px 48px; min-width:0;}
+h1{font-size:2em; color:#fff; border-bottom:3px solid var(--accent); padding-bottom:14px;}
+h2{font-size:1.5em; color:var(--accent); margin-top:48px; border-bottom:1px solid var(--border); padding-bottom:8px;}
+h3{font-size:1.15em; color:#fff; margin-top:28px;}
+h4{font-size:1em; color:var(--good); margin-top:20px;}
+p,li{color:var(--text);}
+.muted{color:var(--muted); font-size:0.9em;}
+code{background:var(--code-bg); padding:2px 7px; border-radius:5px; font-family:"SF Mono",Consolas,monospace; font-size:0.85em; direction:ltr; display:inline-block;}
+pre{
+  background:var(--code-bg); border:1px solid var(--border); border-radius:10px;
+  padding:18px; overflow-x:auto; direction:ltr; text-align:left;
+}
+pre code{background:none; padding:0; font-size:0.82em; line-height:1.7; color:#d6e2ee;}
+.card{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:20px 24px; margin:18px 0;}
+.analogy{background:linear-gradient(135deg,#1a2f3a,#14202b); border-right:4px solid var(--accent); border-radius:8px; padding:14px 20px; margin:16px 0;}
+.analogy b{color:var(--accent);}
+.good-box{border-right:4px solid var(--good); background:#14251c;}
+.bad-box{border-right:4px solid var(--bad); background:#251515;}
+.warn-box{border-right:4px solid var(--warn); background:#252012;}
+table{width:100%; border-collapse:collapse; margin:16px 0; font-size:0.88em;}
+th,td{border:1px solid var(--border); padding:10px 12px; text-align:right;}
+th{background:var(--panel2); color:var(--accent);}
+tr:nth-child(even){background:rgba(255,255,255,0.02);}
+.good{color:var(--good);} .bad{color:var(--bad);} .warn{color:var(--warn);}
+.tag{display:inline-block; background:var(--panel2); border:1px solid var(--border); border-radius:20px; padding:2px 12px; font-size:0.75em; color:var(--accent);}
+.flow{direction:ltr; text-align:center; font-family:monospace; background:var(--code-bg); border:1px solid var(--border); border-radius:10px; padding:20px; margin:16px 0; line-height:2.2; color:var(--good);}
+.step{background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px 20px; margin:12px 0; position:relative;}
+.step .num{display:inline-block; background:var(--accent); color:#08121c; width:28px; height:28px; border-radius:50%; text-align:center; line-height:28px; font-weight:bold; margin-left:8px;}
+.task{background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:14px 20px; margin:10px 0;}
+.task .id{color:var(--accent); font-weight:bold; font-family:monospace;}
+.done{color:var(--good); font-weight:bold;}
+hr{border:none; border-top:1px solid var(--border); margin:40px 0;}
+.toc-num{color:var(--accent); font-weight:bold;}
+kbd{background:var(--panel2); border:1px solid var(--border); border-radius:4px; padding:1px 6px; font-size:0.8em;}
+@media(max-width:900px){ nav{display:none;} main{padding:24px;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav>
+  <h3>۰ — شروع</h3>
+  <a href="#intro">این سند چیست؟</a>
+  <a href="#bigpicture">تصویر کلی پروژه</a>
+  <h3>۱ — کانسپت‌ها از صفر</h3>
+  <a href="#c-datapipeline">خط لولهٔ داده چیست؟</a>
+  <a href="#c-batch-stream">Batch در برابر Streaming</a>
+  <a href="#c-medallion">معماری Medallion</a>
+  <a href="#c-lakehouse">Lakehouse چیست؟</a>
+  <a href="#c-kafka">Kafka</a>
+  <a href="#c-schema">Schema Registry</a>
+  <a href="#c-spark">Apache Spark</a>
+  <a href="#c-minio">MinIO</a>
+  <a href="#c-iceberg">Apache Iceberg</a>
+  <a href="#c-clickhouse">ClickHouse</a>
+  <a href="#c-airflow">Airflow</a>
+  <a href="#c-metabase">Metabase</a>
+  <a href="#c-kimball">مدل ابعادی (Kimball)</a>
+  <a href="#c-obt">One Big Table (OBT)</a>
+  <a href="#c-key">کلید Surrogate و قطعی</a>
+  <a href="#c-idem">Idempotency</a>
+  <a href="#c-grain">Grain (دانه‌بندی)</a>
+  <h3>۲ — تسک‌های Gold</h3>
+  <a href="#tasks">لیست کارها برای مدیر</a>
+  <h3>۳ — توضیح کد</h3>
+  <a href="#code-overview">نقشهٔ فایل‌ها</a>
+  <a href="#code-config">config.py</a>
+  <a href="#code-transform">transform.py</a>
+  <a href="#code-clickhouse">clickhouse.py</a>
+  <a href="#code-job">job.py</a>
+  <a href="#code-dag">DAG</a>
+  <a href="#code-sql">فایل‌های SQL</a>
+</nav>
+<main>
+
+<h1 id="intro">راهنمای کامل لایهٔ Gold — از صفر تا کد</h1>
+<p class="muted">این سند برای کسی نوشته شده که هیچ پیش‌زمینه‌ای از مهندسی داده ندارد. اول همهٔ مفاهیم را با زبان ساده و مثال توضیح می‌دهیم، بعد کارهای انجام‌شدهٔ لایهٔ Gold را به‌شکل تسک برای ارائه به مدیر لیست می‌کنیم، و در آخر خط‌به‌خط کد Gold را شرح می‌دهیم. متن فارسی است ولی همهٔ کدها و دستورها چپ‌به‌راست (LTR) نمایش داده می‌شوند.</p>
+
+<div class="analogy">
+<b>یک تشبیه برای کل پروژه:</b> تصور کن یک فروشگاه اینترنتی بزرگ داری. هر لحظه دو نوع اتفاق می‌افتد: مردم <b>خرید</b> می‌کنند (سفارش، پرداخت) و مردم در سایت <b>می‌چرخند</b> (کلیک، جستجو، دیدن محصول). این پروژه یک «کارخانهٔ فرآوری داده» است که این دو جریان خام را می‌گیرد، تمیز و مرتب می‌کند، و در نهایت به شکلی درمی‌آورد که مدیرها بتوانند در یک داشبورد ببینند «دیروز چه گذشت».
+</div>
+
+<h2 id="bigpicture">تصویر کلی پروژه</h2>
+<p>کل مسیر داده در پروژه این است:</p>
+<div class="flow">
+Kafka (منبع رویدادها)<br>↓<br>
+Spark → MinIO &nbsp; [ لایهٔ Bronze = داده خام ]<br>↓<br>
+Spark → Iceberg &nbsp; [ لایهٔ Silver = داده تمیز و مرتب ]<br>↓<br>
+Spark → ClickHouse &nbsp; [ <b>لایهٔ Gold = آمادهٔ نمایش</b> ]<br>↓<br>
+Metabase (داشبورد برای مدیر)
+</div>
+<p class="muted">در ادامه تک‌تک این کلمه‌ها را توضیح می‌دهیم. نگران نباش اگر الان هیچ‌کدام آشنا نیست.</p>
+
+<hr>
+<h1>بخش ۱ — همهٔ کانسپت‌ها، از صفر</h1>
+
+<h2 id="c-datapipeline">خط لولهٔ داده (Data Pipeline) چیست؟</h2>
+<p>یک «خط لوله» مثل یک کارخانه است: داده از یک سر خام وارد می‌شود، در چند مرحله پردازش و تمیز می‌شود، و از سر دیگر آماده و قابل‌استفاده بیرون می‌آید. هر مرحله یک کار مشخص انجام می‌دهد و نتیجه را به مرحلهٔ بعد تحویل می‌دهد.</p>
+<div class="analogy"><b>تشبیه:</b> کارخانهٔ آبمیوه. میوهٔ خاک‌آلود می‌آید (خام) → شسته می‌شود → پوست‌گیری و آب‌گیری می‌شود → در بطری بسته‌بندی می‌شود (آماده برای فروش). هر ایستگاه یک وظیفه دارد.</div>
+
+<h2 id="c-batch-stream">Batch در برابر Streaming</h2>
+<p>دو روش برای پردازش داده وجود دارد:</p>
+<table>
+<tr><th>روش</th><th>یعنی چه</th><th>مثال</th></tr>
+<tr><td><b>Streaming</b> (جریانی)</td><td>داده همان لحظه که می‌رسد پردازش می‌شود، پیوسته</td><td>هر کلیک کاربر همان لحظه ثبت شود</td></tr>
+<tr><td><b>Batch</b> (دسته‌ای)</td><td>داده جمع می‌شود و هر چند وقت یک‌بار یکجا پردازش می‌شود</td><td>هر شب ساعت ۳، همهٔ داده‌های امروز پردازش شود</td></tr>
+</table>
+<p class="muted">در این پروژه: ورود داده از Kafka با Streaming است (لایهٔ Bronze)، ولی ساخت Silver و Gold به‌صورت Batch (روزانه) انجام می‌شود.</p>
+
+<h2 id="c-medallion">معماری Medallion (مدال / سه لایه)</h2>
+<p>روشی استاندارد برای سازمان‌دهی داده در سه لایه، به‌نام رنگ مدال‌ها. هر لایه داده را یک پله تمیزتر و آماده‌تر می‌کند:</p>
+<table>
+<tr><th>لایه</th><th>معنی فارسی</th><th>کارش چیست</th></tr>
+<tr><td>🥉 <b>Bronze</b></td><td>برنز / خام</td><td>داده را دقیقاً همان‌طور که رسید ذخیره می‌کند. دست نمی‌زند.</td></tr>
+<tr><td>🥈 <b>Silver</b></td><td>نقره / تمیز</td><td>داده را تمیز، اعتبارسنجی، و مرتب می‌کند. اینجا داده «درست» می‌شود.</td></tr>
+<tr><td>🥇 <b>Gold</b></td><td>طلا / آماده</td><td>داده را برای گزارش و داشبورد سریع و ساده می‌کند.</td></tr>
+</table>
+<div class="analogy"><b>تشبیه:</b> آشپزی. Bronze = مواد خام از بازار. Silver = مواد شسته و خردشده و آمادهٔ پخت. Gold = غذای آمادهٔ سرو در بشقاب.</div>
+<div class="card"><b>چرا سه لایه؟</b> چون اگر یک‌جا اشتباهی رخ دهد، فقط همان لایه خراب می‌شود و می‌توان از روی لایهٔ قبلی دوباره ساختش. جدا بودن لایه‌ها = قابل‌اعتماد و قابل‌دیباگ بودن.</div>
+
+<h2 id="c-lakehouse">Lakehouse چیست؟</h2>
+<p>ترکیب دو ایده: <b>Data Lake</b> (دریاچهٔ داده — انبار ارزان و بزرگ برای هر نوع داده) و <b>Data Warehouse</b> (انبار داده — ساختارمند و سریع برای گزارش). Lakehouse یعنی هم انعطاف و ارزانی دریاچه را داشته باش، هم نظم و سرعت انبار را.</p>
+
+<h2 id="c-kafka">Apache Kafka</h2>
+<p>یک «خط لولهٔ پیام» بسیار سریع. هر اتفاقی در سایت (کلیک، خرید، جستجو) به‌شکل یک پیام داخل Kafka ریخته می‌شود، و برنامه‌های دیگر این پیام‌ها را می‌خوانند. مثل یک نوار نقاله که پیام‌ها روی آن حرکت می‌کنند.</p>
+<div class="analogy"><b>تشبیه:</b> صندوق پستی مرکزی. همه نامه‌ها (رویدادها) را داخلش می‌اندازند، و هر کس که لازم دارد می‌آید و می‌خواند. در این پروژه Kafka <b>خارجی</b> است؛ یعنی جای دیگری مدیریت می‌شود و ما فقط به آن وصل می‌شویم.</div>
+
+<h2 id="c-schema">Schema Registry (دفتر ثبت ساختار)</h2>
+<p>یک «قرارداد» که می‌گوید هر پیام Kafka دقیقاً چه فیلدهایی و چه نوعی دارد. مثل فرمی که همه باید طبق آن پر کنند، تا فرستنده و گیرنده سر شکل داده اختلاف نداشته باشند.</p>
+
+<h2 id="c-spark">Apache Spark</h2>
+<p>موتور پردازش داده در مقیاس بزرگ. وقتی داده آن‌قدر زیاد است که یک کامپیوتر از پسش برنمی‌آید، Spark کار را بین چند ماشین پخش می‌کند و موازی انجام می‌دهد. در این پروژه Spark همهٔ تبدیل‌ها را انجام می‌دهد (خواندن، تمیزکردن، join، نوشتن).</p>
+<div class="analogy"><b>تشبیه:</b> به‌جای اینکه یک نفر ۱۰۰۰ ظرف را بشوید، ۱۰ نفر هرکدام ۱۰۰ تا را هم‌زمان می‌شویند. Spark همان تقسیم‌کار است.</div>
+
+<h2 id="c-minio">MinIO</h2>
+<p>یک انبار فایل (object storage) که دقیقاً مثل Amazon S3 کار می‌کند، ولی روی سرور خودمان. فایل‌های خام و جداول را اینجا نگه می‌داریم. ارزان و بزرگ.</p>
+
+<h2 id="c-iceberg">Apache Iceberg</h2>
+<p>یک «قالب جدول» روی فایل‌های خام. Iceberg باعث می‌شود مجموعه‌ای از فایل‌ها روی MinIO مثل یک جدول دیتابیس واقعی رفتار کنند: نسخه‌دار، قابل‌اعتماد، و امن برای به‌روزرسانی.</p>
+<div class="card"><b>ACID یعنی چه؟</b> تضمین اینکه یک عملیات یا کامل انجام می‌شود یا اصلاً نه — هیچ‌وقت نصفه‌کاره نمی‌ماند. مثل انتقال پول بانکی: یا کامل جابه‌جا می‌شود یا هیچ. Iceberg این تضمین را می‌دهد.</div>
+<p class="muted"><b>MERGE:</b> عملیاتی که می‌گوید «اگر این رکورد بود به‌روزش کن، اگر نبود اضافه‌اش کن» — بدون ساختن رکورد تکراری.</p>
+
+<h2 id="c-clickhouse">ClickHouse</h2>
+<p>یک دیتابیس مخصوص <b>تحلیل</b> و گزارش. خیلی سریع می‌تواند روی میلیون‌ها ردیف جمع بزند، بشمارد، میانگین بگیرد. لایهٔ Gold ما اینجا می‌نشیند.</p>
+<div class="card"><b>دیتابیس ستونی (Columnar):</b> دیتابیس‌های معمولی داده را ردیف‌به‌ردیف نگه می‌دارند. ClickHouse ستون‌به‌ستون نگه می‌دارد. برای گزارش (مثلاً «مجموع فروش») که فقط چند ستون لازم است، این خیلی سریع‌تر است چون فقط همان ستون‌ها خوانده می‌شوند.</div>
+
+<h2 id="c-airflow">Apache Airflow</h2>
+<p>«زمان‌بند و مدیر کارها». تعیین می‌کند چه کاری، چه زمانی، و به چه ترتیبی اجرا شود. مثلاً «هر شب ساعت ۳، اول چک کن Silver آماده است، بعد Gold را بساز».</p>
+<div class="card"><b>DAG چیست؟</b> مخفف Directed Acyclic Graph — یعنی یک نمودار از کارها که ترتیب و وابستگی‌شان مشخص است و حلقه ندارد (کار A قبل B، B قبل C). هر خط لولهٔ Airflow یک DAG است.</div>
+
+<h2 id="c-metabase">Metabase</h2>
+<p>ابزار ساخت داشبورد و نمودار. به ClickHouse وصل می‌شود و مدیر می‌تواند بدون نوشتن کد، گزارش و نمودار ببیند.</p>
+
+<h2 id="c-kimball">مدل ابعادی و روش Kimball (Star Schema)</h2>
+<p>روشی برای چیدن جداول تحلیلی. داده به دو نوع جدول تقسیم می‌شود:</p>
+<table>
+<tr><th>نوع</th><th>یعنی چه</th><th>مثال</th></tr>
+<tr><td><b>Fact</b> (واقعه)</td><td>اتفاق‌های قابل‌شمارش. عدد و رویداد.</td><td>یک سفارش، یک کلیک، یک پرداخت</td></tr>
+<tr><td><b>Dimension</b> (بُعد)</td><td>توصیف‌گرها. «چه کسی، چه چیزی، کِی، کجا»</td><td>کاربر، محصول، تاریخ، دستگاه</td></tr>
+</table>
+<p>به این چیدمان «Star Schema» (طرح ستاره‌ای) می‌گویند چون جدول fact وسط است و dimensionها دورش مثل پرتوهای ستاره قرار می‌گیرند.</p>
+<div class="analogy"><b>تشبیه:</b> یک رسید خرید. خودِ خرید = fact. اطلاعات فروشگاه، کالا، مشتری، تاریخ = dimensionها. رسید فقط به آن‌ها اشاره می‌کند (کد کالا)، نه اینکه همه‌چیز را تکرار کند.</div>
+
+<h2 id="c-obt">One Big Table (OBT) — یک جدول بزرگ</h2>
+<p>نقطهٔ مقابل Star Schema. به‌جای چند جدول جدا که باید به هم وصل شوند، همه‌چیز را در <b>یک جدول پهن</b> می‌ریزیم که همهٔ ستون‌ها را دارد.</p>
+<table>
+<tr><th></th><th>Star Schema</th><th>OBT</th></tr>
+<tr><td>تعداد جدول</td><td>چند تا</td><td>یکی</td></tr>
+<tr><td>هنگام گزارش</td><td>باید join شوند (کند)</td><td>join لازم نیست (سریع)</td></tr>
+<tr><td>تکرار داده</td><td>کم</td><td>زیاد (عمدی)</td></tr>
+</table>
+<div class="card"><b>چرا در Gold از OBT استفاده می‌کنیم؟</b> چون هدف Gold سرعت است. join کردن در زمان گزارش کند است؛ پس یک‌بار موقع ساخت Gold همه‌چیز را join می‌کنیم و در یک جدول تخت می‌ریزیم تا هر گزارش سریع اجرا شود. تکرار داده در Gold مشکلی نیست چون Gold همیشه از Silver دوباره ساخته می‌شود.</div>
+
+<h2 id="c-key">کلید Surrogate و کلید قطعی (Deterministic)</h2>
+<p><b>کلید Surrogate:</b> یک شناسهٔ ساختگی و یکتا که ما برای هر ردیف می‌سازیم (به‌جای استفادهٔ مستقیم از شناسهٔ اصلی).</p>
+<p><b>قطعی (Deterministic):</b> یعنی اگر همان ورودی را دوباره بدهی، همان کلید ساخته می‌شود. در این پروژه با تابع <code>sha2</code> (یک تابع هش) از روی فیلدهای اصلی ساخته می‌شود.</p>
+<div class="card"><b>چرا مهم است؟</b> چون اگر job را دوباره اجرا کنیم، همان رکورد <b>همان کلید</b> را می‌گیرد و رکورد تکراری ساخته نمی‌شود. این پایهٔ Idempotency است (پایین).</div>
+
+<h2 id="c-idem">Idempotency (بی‌اثری تکرار)</h2>
+<p>یعنی چند بار اجرا کردن یک کار، همان نتیجهٔ یک‌بار اجرا را بدهد — نه بیشتر، نه تکراری.</p>
+<div class="analogy"><b>تشبیه:</b> دکمهٔ طبقهٔ آسانسور. چند بار هم فشارش بدهی، فقط یک‌بار می‌رود طبقهٔ ۳. اگر job Gold را دو بار برای تاریخ دیروز اجرا کنیم، داده‌ها دوتا نمی‌شوند.</div>
+<p class="muted">در کد Gold این‌طور تضمین می‌شود: اول ردیف‌های آن تاریخ پاک می‌شوند، بعد ردیف‌های تازه درج می‌شوند.</p>
+
+<h2 id="c-grain">Grain (دانه‌بندی) — مهم‌ترین مفهوم برای تصمیم OBT</h2>
+<p>«Grain» یعنی <b>هر ردیف جدول نمایندهٔ چه چیزی است؟</b> این ریزترین واحد جدول است.</p>
+<table>
+<tr><th>جدول</th><th>Grain (هر ردیف = ؟)</th></tr>
+<tr><td>fact رفتاری</td><td>یک <b>رویداد</b> (یک کلیک/بازدید)</td></tr>
+<tr><td>fact سفارش</td><td>یک <b>سفارش</b></td></tr>
+<tr><td>fact قلم سفارش</td><td>یک <b>کالای داخل سفارش</b></td></tr>
+</table>
+<div class="warn-box card"><b>چرا این برای ما حیاتی است؟</b> چون داده‌های رفتاری (grain = رویداد) و تراکنشی (grain = سفارش) دانه‌بندی متفاوتی دارند. اگر این دو را زورکی در یک جدول بریزیم، اعداد <b class="bad">دوبار شمرده می‌شوند</b> (double counting) و گزارش‌ها غلط می‌شوند. به همین دلیل تصمیم گرفتیم آن‌ها را در یک OBT ادغام نکنیم — که در بخش‌های بعد کامل توضیح داده‌ایم.</div>
+
+<hr>
+<h1 id="tasks">بخش ۲ — تسک‌های انجام‌شدهٔ لایهٔ Gold (برای ارائه به مدیر)</h1>
+<p class="muted">این‌ها کارهایی است که در لایهٔ Gold انجام شده، شکسته‌شده به تسک‌های مجزا و قابل‌گزارش. همه بر اساس کد واقعی پروژه‌اند.</p>
+
+<div class="task"><span class="id">GOLD-01</span> — <b>طراحی schema و DDL جدول Gold</b> <span class="done">✓ انجام‌شده</span>
+<p class="muted">تعریف ساختار جدول <code>lakehouse.behavioral_obt</code> در ClickHouse: ۵۰+ ستون، موتور <code>ReplacingMergeTree</code>، پارتیشن ماهانه، و کلید مرتب‌سازی. خروجی: <code>sql/clickhouse/001_behavioral_gold_obt.sql</code>.</p></div>
+
+<div class="task"><span class="id">GOLD-02</span> — <b>پیکربندی و قرارداد ستون‌ها</b> <span class="done">✓ انجام‌شده</span>
+<p class="muted">ساخت کلاس پیکربندی که تنظیمات اتصال ClickHouse و مسیر جداول Silver را از محیط می‌خواند، و لیست دقیق و ترتیب ستون‌های OBT را به‌عنوان «منبع حقیقت» نگه می‌دارد. خروجی: <code>src/gold/behavioral_gold_config.py</code>.</p></div>
+
+<div class="task"><span class="id">GOLD-03</span> — <b>منطق تبدیل: flatten کردن Star Schema به OBT</b> <span class="done">✓ انجام‌شده</span>
+<p class="muted">نوشتن کد Spark که جدول fact رفتاری را با سه dimension (device، event_type، session) join می‌کند و یک جدول تخت می‌سازد. خروجی: <code>src/gold/behavioral_gold_transform.py</code>.</p></div>
+
+<div class="task"><span class="id">GOLD-04</span> — <b>نویسندهٔ ClickHouse با بارگذاری idempotent</b> <span class="done">✓ انجام‌شده</span>
+<p class="muted">پیاده‌سازی درج داده در ClickHouse با الگوی «اول پاک کن، بعد درج کن» برای هر تاریخ، به‌علاوهٔ چک تعداد ردیف‌ها. خروجی: <code>src/gold/behavioral_gold_clickhouse.py</code>.</p></div>
+
+<div class="task"><span class="id">GOLD-05</span> — <b>نقطهٔ ورود Job و اعتبارسنجی قرارداد</b> <span class="done">✓ انجام‌شده</span>
+<p class="muted">ساخت job قابل‌اجرا از خط فرمان که تبدیل را اجرا می‌کند و قبل از نوشتن، صحت داده را چک می‌کند (نبود کلید null، نبود تکرار، تطابق ستون‌ها). خروجی: <code>src/jobs/gold_behavioral_job.py</code>.</p></div>
+
+<div class="task"><span class="id">GOLD-06</span> — <b>ارکستراسیون با Airflow DAG</b> <span class="done">✓ انجام‌شده</span>
+<p class="muted">ساخت DAG روزانه (ساعت ۳ بامداد) که اول آماده بودن Silver و ClickHouse را چک می‌کند و بعد job را اجرا می‌کند. خروجی: <code>workflow/dags/gold_behavioral_dag.py</code>.</p></div>
+
+<div class="task"><span class="id">GOLD-07</span> — <b>کوئری‌های تأیید و آماده‌سازی داشبورد</b> <span class="done">✓ انجام‌شده</span>
+<p class="muted">نوشتن کوئری‌های بررسی صحت بارگذاری (شمارش، یکتایی، تازگی داده) و نمونه‌های آمادهٔ داشبورد. خروجی: <code>sql/clickhouse/behavioral_gold_verification.sql</code>.</p></div>
+
+<div class="task"><span class="id">GOLD-08</span> — <b>تصمیم معماری: عدم ادغام transactional و behavioral</b> <span class="done">✓ تحلیل و مستند شد</span>
+<p class="muted">تحلیل و تصمیم‌گیری دربارهٔ اینکه چرا دو دامنه نباید در یک OBT ادغام شوند (ناسازگاری grain و double counting). مستند در <code>docs/GOLD_LAYER.fa.md</code>.</p></div>
+
+<h3>کارهای باقی‌مانده (برای شفافیت با مدیر)</h3>
+<div class="task warn-box"><span class="id">GOLD-09</span> — <b>Gold تراکنشی / مدل مشترک</b> <span class="warn">◔ آینده</span>
+<p class="muted">لایهٔ Gold برای دادهٔ تراکنشی هنوز ساخته نشده — عمداً به تعویق افتاده تا نیاز تحلیلی مشخص شود.</p></div>
+<div class="task warn-box"><span class="id">GOLD-10</span> — <b>داشبوردهای Metabase</b> <span class="warn">◔ آینده</span>
+<p class="muted">اتصال Metabase به جدول Gold و ساخت داشبوردهای نهایی.</p></div>
+
+<hr>
+<h1 id="code-overview">بخش ۳ — توضیح کد لایهٔ Gold</h1>
+<p>حالا که مفاهیم را می‌دانی، کد را می‌بینیم. لایهٔ Gold از چند فایل تشکیل شده که هرکدام یک وظیفه دارند:</p>
+<div class="flow">
+gold_behavioral_job.py  (فرمانده — همه‌چیز را هماهنگ می‌کند)<br>
+&nbsp;&nbsp;├── behavioral_gold_config.py   (تنظیمات)<br>
+&nbsp;&nbsp;├── behavioral_gold_transform.py (ساخت OBT با Spark)<br>
+&nbsp;&nbsp;└── behavioral_gold_clickhouse.py (نوشتن در ClickHouse)<br>
+<br>
+gold_behavioral_dag.py  (Airflow — کِی و به چه ترتیب اجرا شود)
+</div>
+
+<h2 id="code-config">۱. <code>behavioral_gold_config.py</code> — تنظیمات</h2>
+<p>این فایل «کارت مشخصات» لایهٔ Gold است. می‌گوید به کدام ClickHouse وصل شویم و جداول Silver کجا هستند. همه از متغیرهای محیطی (env) خوانده می‌شود تا در محیط‌های مختلف (لوکال/سرور) بدون تغییر کد کار کند.</p>
+<pre><code>@dataclass(frozen=True)
+class GoldBehavioralConfig:
+    silver: BehavioralRuntimeConfig   # تنظیمات لایهٔ Silver (منبع داده)
+    clickhouse_host: str              # آدرس ClickHouse
+    clickhouse_port: int
+    clickhouse_database: str
+    clickhouse_table: str             # نام جدول Gold
+    insert_batch_size: int            # چند ردیف در هر دسته درج شود
+
+    @property
+    def fact_table(self):             # مسیر جدول fact در Silver
+        return self.silver.qualified_table("fact_behavioral_events")</code></pre>
+<p class="muted"><b>نکتهٔ کلیدی:</b> کلمهٔ <code>frozen=True</code> یعنی این تنظیمات بعد از ساخته‌شدن قابل‌تغییر نیست — جلوی خطاهای ناخواسته را می‌گیرد. همچنین لیست <code>GOLD_BEHAVIORAL_COLUMNS</code> در همین فایل، ترتیب دقیق ستون‌های OBT را نگه می‌دارد و «منبع حقیقت» schema است.</p>
+
+<h2 id="code-transform">۲. <code>behavioral_gold_transform.py</code> — ساخت OBT</h2>
+<p>قلب تبدیل. اینجا Star Schema به One Big Table تبدیل می‌شود. مرحله‌به‌مرحله:</p>
+<div class="step"><span class="num">۱</span> جدول fact را فقط برای یک تاریخ مشخص فیلتر می‌کند:</div>
+<pre><code>fact = spark.table(config.fact_table).filter(
+    F.col("processing_date") == F.lit(execution_date).cast("date")
+)</code></pre>
+<div class="step"><span class="num">۲</span> سه dimension را آماده می‌کند (فقط ستون‌های لازم):</div>
+<pre><code>device = spark.table(config.device_table).select(
+    "device_key", F.col("device_name").alias("dim_device_name"),
+)
+# همین‌طور برای event_type و session</code></pre>
+<div class="step"><span class="num">۳</span> جدول fact را با سه dimension با <code>left join</code> می‌چسباند:</div>
+<pre><code>joined = (
+    fact.alias("f")
+    .join(device.alias("d"), "device_key", "left")
+    .join(event_type.alias("et"), "event_type_key", "left")
+    .join(session.alias("s"), "session_key", "left")
+)</code></pre>
+<p class="muted"><b>چرا <code>left join</code>؟</b> تا اگر یک رویداد به هر دلیلی dimension متناظر نداشت، ردیفش حذف نشود بلکه با مقدار خالی بماند. یعنی هیچ رویدادی گم نمی‌شود.</p>
+<div class="step"><span class="num">۴</span> در نهایت همهٔ ستون‌ها را در یک جدول تخت انتخاب می‌کند و ستون‌های پیچیده (لیست کالاهای سبد) را با <code>to_json</code> به متن تبدیل می‌کند (چون ClickHouse ساختارهای تودرتوی Spark را مستقیم نمی‌فهمد):</p></div>
+<pre><code>F.to_json(F.col("f.cart_items")).alias("cart_items_json"),
+F.current_timestamp().alias("gold_loaded_at"),  # زمان بارگذاری</code></pre>
+
+<h2 id="code-clickhouse">۳. <code>behavioral_gold_clickhouse.py</code> — نوشتن در ClickHouse</h2>
+<p>این فایل داده را در ClickHouse می‌نویسد و <b>Idempotency</b> را تضمین می‌کند. مهم‌ترین تابع <code>replace_behavioral_gold_partition</code> است:</p>
+<div class="step"><span class="num">۱</span> اگر داده‌ای نبود، هشدار می‌دهد و برمی‌گردد (کار بی‌مورد نمی‌کند).</div>
+<div class="step"><span class="num">۲</span> جدول و دیتابیس را اگر نبودند می‌سازد.</div>
+<div class="step"><span class="num">۳</span> <b>قلب idempotency:</b> اول ردیف‌های همان تاریخ را پاک می‌کند:</div>
+<pre><code>client.command(
+    f"ALTER TABLE {table} DELETE "
+    f"WHERE processing_date = toDate('{execution_date}')",
+    settings={"mutations_sync": 2},  # صبر کن تا پاک‌کردن واقعاً تمام شود
+)</code></pre>
+<div class="step"><span class="num">۴</span> بعد ردیف‌های تازه را دسته‌دسته (batch) درج می‌کند:</div>
+<pre><code>for batch in _rows_in_batches(df, columns, config.insert_batch_size):
+    client.insert(table, batch, column_names=list(columns))
+    inserted += len(batch)</code></pre>
+<div class="step"><span class="num">۵</span> در آخر چک می‌کند تعداد ردیف‌های درج‌شده با تعداد منبع برابر باشد — وگرنه خطا می‌دهد (تضمین کامل بودن):</div>
+<pre><code>if inserted != source_count:
+    raise RuntimeError("insert count mismatch ...")</code></pre>
+<div class="card"><b>چرا batch؟</b> درج میلیون‌ها ردیف یک‌جا حافظه را پر می‌کند. دسته‌دسته درج‌کردن (مثلاً ۱۰٬۰۰۰تایی) امن‌تر و پایدارتر است.</div>
+
+<h2 id="code-job">۴. <code>gold_behavioral_job.py</code> — فرمانده</h2>
+<p>این فایل نقطهٔ شروع است و همه‌چیز را هماهنگ می‌کند. با دستور خط‌فرمان و یک تاریخ اجرا می‌شود:</p>
+<pre><code>def run_gold_behavioral_job(execution_date):
+    config = GoldBehavioralConfig.from_env()      # ۱. خواندن تنظیمات
+    spark = create_silver_behavioral_spark_session(...)  # ۲. راه‌اندازی Spark
+    try:
+        gold_df = build_behavioral_gold_obt(...).cache()  # ۳. ساخت OBT
+        _assert_gold_contract(gold_df, ...)               # ۴. چک صحت
+        inserted = replace_behavioral_gold_partition(...) # ۵. نوشتن
+        return inserted
+    finally:
+        spark.stop()   # ۶. همیشه Spark را ببند (حتی اگر خطا رخ داد)</code></pre>
+<p><b>تابع <code>_assert_gold_contract</code></b> سه چیز را قبل از نوشتن بررسی می‌کند (دروازهٔ کیفیت):</p>
+<ul>
+<li>ستون‌ها دقیقاً با قرارداد بخوانند</li>
+<li>هیچ <code>event_key</code> یا <code>event_timestamp</code> خالی (null) نباشد</li>
+<li>هیچ <code>event_key</code> تکراری نباشد</li>
+</ul>
+<div class="card"><b>چرا <code>.cache()</code>؟</b> چون داده چند بار استفاده می‌شود (هم برای چک، هم برای نوشتن). cache یعنی Spark یک‌بار محاسبه کند و در حافظه نگه دارد، نه اینکه هر بار از اول بسازد.</div>
+
+<h2 id="code-dag">۵. <code>gold_behavioral_dag.py</code> — زمان‌بند (Airflow)</h2>
+<p>این DAG تعیین می‌کند Gold کِی و با چه شرطی اجرا شود. سه تسک پشت‌سرهم:</p>
+<div class="flow">
+check_silver_behavioral_succeeded  (آیا Silver آماده است؟)<br>↓<br>
+check_clickhouse_ready  (آیا ClickHouse بالا است؟)<br>↓<br>
+run_gold_behavioral_job  (حالا Gold را بساز)
+</div>
+<pre><code>schedule="0 3 * * *"   # هر شب ساعت ۳ بامداد
+max_active_runs=1      # همزمان بیش از یک اجرا نباشد
+retries=2              # اگر خطا خورد، ۲ بار دوباره تلاش کن</code></pre>
+<div class="card"><b>الگوی «اول چک، بعد اجرا»:</b> اگر Silver آن روز کامل نشده باشد، Gold اصلاً اجرا نمی‌شود. این جلوی ساختن Gold روی دادهٔ ناقص را می‌گیرد.</div>
+
+<h2 id="code-sql">۶. فایل‌های SQL</h2>
+<p><b><code>sql/clickhouse/001_behavioral_gold_obt.sql</code></b> — همان دستور ساخت جدول، ولی جدا از کد Python. داشتنش جدا یعنی می‌توان جدول را دستی هم ساخت. بخش‌های مهمش:</p>
+<pre><code>ENGINE = ReplacingMergeTree(gold_loaded_at)  -- تکراری‌ها را با نسخهٔ جدیدتر جایگزین کن
+PARTITION BY toYYYYMM(event_timestamp)       -- داده را ماه‌به‌ماه بخش‌بندی کن
+ORDER BY (processing_date, event_category,    -- ترتیب فیزیکی برای کوئری سریع
+          event_type, user_key, session_key, event_key)</code></pre>
+<p class="muted"><b>چرا <code>PARTITION BY</code>؟</b> بخش‌بندی ماهانه یعنی وقتی گزارش فقط یک ماه را می‌خواهد، ClickHouse بقیه را اصلاً نمی‌خواند = سریع‌تر. همچنین پاک‌کردن یک تاریخ (برای idempotency) ارزان می‌شود.</p>
+<p><b><code>behavioral_gold_verification.sql</code></b> — کوئری‌هایی برای اطمینان از درستی بارگذاری: آیا تعداد درست است؟ آیا تکراری هست؟ تازه‌ترین داده مال کِی است؟ این‌ها هم بررسی صحت‌اند و هم نمونهٔ آمادهٔ ساخت داشبورد در Metabase.</p>
+
+<hr>
+<div class="card good-box">
+<h3 style="margin-top:0;">جمع‌بندی یک‌خطی هر بخش</h3>
+<ul>
+<li><b>کانسپت‌ها:</b> داده از Kafka می‌آید، با Spark در سه لایه (Bronze→Silver→Gold) تمیز و آماده می‌شود، در ClickHouse می‌نشیند و در Metabase نمایش داده می‌شود.</li>
+<li><b>Gold:</b> جدول fact رفتاری با dimensionها join می‌شود و به یک جدول بزرگ تخت (OBT) در ClickHouse تبدیل می‌شود، به‌شکل idempotent و روزانه.</li>
+<li><b>تصمیم مهم:</b> دادهٔ تراکنشی و رفتاری به‌خاطر تفاوت grain در یک OBT ادغام نمی‌شوند.</li>
+</ul>
+</div>
+
+</main>
+</div>
+</div>
+</body>
+</html>
