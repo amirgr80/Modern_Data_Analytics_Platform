@@ -3,6 +3,10 @@ from dataclasses import dataclass
 
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
+
+from common.silver_transactional_run_context import (
+    run_timestamp_column,
+)
 from pyspark.sql.types import BinaryType
 
 
@@ -214,28 +218,48 @@ def build_warning_rules(table_name: str) -> list:
 def build_quality_issues(validated_df: DataFrame, table_name: str) -> DataFrame:
     record_id_field = RECORD_ID_FIELDS[table_name]
 
+    # Ensure all required columns exist; if not, fill with null
+    cols = [
+        "source_table",
+        "record_id",
+        "issue_status",
+        "validation_errors",
+        "validation_warnings",
+        "repair_description",
+        "original_record",
+        "_source_file",
+        "_kafka_topic",
+        "_kafka_partition",
+        "_kafka_offset",
+        "_kafka_timestamp",
+        "bronze_ingestion_timestamp",
+        "detected_at"
+    ]
+
+    # Build select expressions safely
+    select_exprs = [
+        F.lit(table_name).alias("source_table"),
+        F.col(record_id_field).cast("string").alias("record_id"),
+        F.when(F.size("validation_errors") > 0, F.lit("REJECTED"))
+         .when(F.col("_timestamp_repaired"), F.lit("REPAIRED"))
+         .otherwise(F.lit("WARNING")).alias("issue_status"),
+        F.col("validation_errors"),
+        F.col("validation_warnings"),
+        F.col("_timestamp_repair_reason").alias("repair_description"),
+        F.col("_original_record").alias("original_record"),
+        F.col("_source_file"),
+        F.col("_kafka_topic"),
+        F.col("_kafka_partition"),
+        F.col("_kafka_offset"),
+        F.col("_kafka_timestamp"),
+        F.col("bronze_ingestion_timestamp"),
+        run_timestamp_column().alias("detected_at")
+    ]
+
     return (
         validated_df
         .filter((F.size("validation_errors") > 0) | (F.size("validation_warnings") > 0))
-        .select(
-            F.lit(table_name).alias("source_table"),
-            F.col(record_id_field).cast("string").alias("record_id"),
-            F.when(F.size("validation_errors") > 0, F.lit("REJECTED"))
-             .when(F.col("_timestamp_repaired"), F.lit("REPAIRED"))
-             .otherwise(F.lit("WARNING")).alias("issue_status"),
-            F.col("validation_errors"),
-            F.col("validation_warnings"),
-            F.col("_timestamp_repair_reason").alias("repair_description"),
-            F.col("_original_record").alias("original_record"),
-            # ستون‌های واقعی از validated_df
-            F.col("_source_file"),
-            F.col("_kafka_topic"),
-            F.col("_kafka_partition"),
-            F.col("_kafka_offset"),
-            F.col("_kafka_timestamp"),
-            F.col("bronze_ingestion_timestamp"),
-            F.current_timestamp().alias("detected_at")
-        )
+        .select(*select_exprs)
     )
 
 

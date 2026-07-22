@@ -5,7 +5,7 @@ x-pipeline-env: &pipeline-env
   KAFKA_BOOTSTRAP_SERVERS: "185.255.90.14:9092"
   ICEBERG_CATALOG_NAME: "lakekeeper"
   ICEBERG_REST_URI: "http://lakekeeper:8181/catalog"
-  ICEBERG_WAREHOUSE: "s3://warehouse"
+  ICEBERG_WAREHOUSE: "silver"
   ICEBERG_NAMESPACE: "silver"
   SPARK_MASTER_URL: "spark://spark-master:7077"
 
@@ -43,7 +43,7 @@ x-airflow-common: &airflow-common
     MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
     ICEBERG_CATALOG_NAME: "lakekeeper"
     ICEBERG_REST_URI: "http://lakekeeper:8181/catalog"
-    ICEBERG_WAREHOUSE: "s3://warehouse"
+    ICEBERG_WAREHOUSE: "silver"
     ICEBERG_NAMESPACE: "silver"
     CLICKHOUSE_HOST: clickhouse
     CLICKHOUSE_HTTP_PORT: "8123"
@@ -95,6 +95,13 @@ x-traefik-labels-metabase: &traefik-labels-metabase
   traefik.http.routers.metabase.rule: Host(`mb.group1.querabootcamp-de.ir`)
   traefik.http.routers.metabase.entrypoints: web
   traefik.http.services.metabase.loadbalancer.server.port: "3000"
+
+x-traefik-labels-lakekeeper: &traefik-labels-lakekeeper
+  traefik.enable: "true"
+  traefik.docker.network: traefik_traefik_network
+  traefik.http.routers.lakekeeper.rule: Host(`lakekeeper.group1.querabootcamp-de.ir`)
+  traefik.http.routers.lakekeeper.entrypoints: web
+  traefik.http.services.lakekeeper.loadbalancer.server.port: "8181"
 
 services:
   postgres:
@@ -203,6 +210,25 @@ services:
         [
           "CMD-SHELL",
           "celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d celery@$$HOSTNAME",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    container_name: airflow-dag-processor
+    command: dag-processor
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "airflow jobs check --job-type DagProcessorJob --hostname $$HOSTNAME",
         ]
       interval: 30s
       timeout: 10s
@@ -381,8 +407,10 @@ services:
       - |
         set -e
         mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
-        mc mb --ignore-existing "local/${ICEBERG_WAREHOUSE_BUCKET:-warehouse}"
         mc mb --ignore-existing "local/${MINIO_BRONZE_BUCKET:-bronze}"
+        mc mb --ignore-existing "local/${ICEBERG_WAREHOUSE_BUCKET:-silver}"
+        mc mb --ignore-existing "local/${MINIO_GOLD_BUCKET:-gold}"
+        mc mb --ignore-existing "local/${LEGACY_ICEBERG_WAREHOUSE_BUCKET:-warehouse}"
         echo "buckets ready"
     restart: "no"
     networks:
@@ -451,8 +479,11 @@ services:
       retries: 10
       start_period: 10s
     restart: unless-stopped
+    labels:
+      <<: *traefik-labels-lakekeeper
     networks:
       - datalake
+      - traefik
 
   lakekeeper-bootstrap:
     image: docker.arvancloud.ir/curlimages/curl:8.11.1
@@ -486,12 +517,12 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      WAREHOUSE_NAME: ${ICEBERG_WAREHOUSE_NAME:-warehouse}
-      WAREHOUSE_BUCKET: ${ICEBERG_WAREHOUSE_BUCKET:-warehouse}
+      WAREHOUSE_NAME: ${ICEBERG_WAREHOUSE_NAME:-silver}
+      WAREHOUSE_BUCKET: ${ICEBERG_WAREHOUSE_BUCKET:-silver}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        body="{\"warehouse-name\":\"$${WAREHOUSE_NAME}\",\"project-id\":\"00000000-0000-0000-0000-000000000000\",\"delete-profile\":{\"type\":\"hard\"},\"storage-profile\":{\"type\":\"s3\",\"bucket\":\"$${WAREHOUSE_BUCKET}\",\"key-prefix\":\"lakehouse\",\"endpoint\":\"http://minio:9000\",\"region\":\"us-east-1\",\"path-style-access\":true,\"flavor\":\"s3-compat\",\"sts-enabled\":false},\"storage-credential\":{\"type\":\"s3\",\"credential-type\":\"access-key\",\"aws-access-key-id\":\"$${MINIO_ROOT_USER}\",\"aws-secret-access-key\":\"$${MINIO_ROOT_PASSWORD}\"}}"
+        body="{\"warehouse-name\":\"$${WAREHOUSE_NAME}\",\"project-id\":\"00000000-0000-0000-0000-000000000000\",\"delete-profile\":{\"type\":\"hard\"},\"storage-profile\":{\"type\":\"s3\",\"bucket\":\"$${WAREHOUSE_BUCKET}\",\"storage-layout\":{\"type\":\"full-hierarchy\",\"namespace\":\"{name}-{uuid}\",\"tabular\":\"{name}-{uuid}\"},\"endpoint\":\"http://minio:9000\",\"region\":\"us-east-1\",\"path-style-access\":true,\"flavor\":\"s3-compat\",\"sts-enabled\":false},\"storage-credential\":{\"type\":\"s3\",\"credential-type\":\"access-key\",\"aws-access-key-id\":\"$${MINIO_ROOT_USER}\",\"aws-secret-access-key\":\"$${MINIO_ROOT_PASSWORD}\"}}"
         code=$$(curl -s -o /dev/null -w "%{http_code}" -X POST \
           http://lakekeeper:8181/management/v1/warehouse \
           -H "Content-Type: application/json" \

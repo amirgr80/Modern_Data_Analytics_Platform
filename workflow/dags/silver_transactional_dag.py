@@ -37,21 +37,34 @@ with DAG(
         conn_id=SPARK_CONNECTION_ID,
         application=APPLICATION_PATH,
         name="silver-transactional-job",
+        packages=(
+            "org.apache.iceberg:"
+            "iceberg-spark-runtime-3.5_2.12:1.6.1,"
+            "org.apache.iceberg:"
+            "iceberg-aws-bundle:1.6.1,"
+            "org.apache.hadoop:"
+            "hadoop-aws:3.3.4"
+        ),
         application_args=[
             "--partition-date",
             "{{ data_interval_start.in_timezone('Asia/Tehran').strftime('%Y%m%d') }}",
             "--catalog",
             "lakekeeper",
-            "--namespace",
+            "--warehouse",
             "silver",
+            "--namespace",
+            "transactional",
             "--quality-namespace",
-            "silver_quality",
+            "transactional_quality",
             "--dim-date-start",
             "2020-01-01",
             "--dim-date-end",
             "2035-12-31",
         ],
         conf={
+            "spark.serializer": (
+                "org.apache.spark.serializer.JavaSerializer"
+            ),
             "spark.sql.extensions": (
                 "org.apache.iceberg.spark.extensions."
                 "IcebergSparkSessionExtensions"
@@ -63,7 +76,7 @@ with DAG(
             "spark.sql.catalog.lakekeeper.uri": (
                 "http://lakekeeper:8181/catalog"
             ),
-            "spark.sql.catalog.lakekeeper.warehouse": "warehouse",
+            "spark.sql.catalog.lakekeeper.warehouse": "silver",
             "spark.sql.catalog.lakekeeper.io-impl": (
                 "org.apache.iceberg.aws.s3.S3FileIO"
             ),
@@ -72,6 +85,7 @@ with DAG(
             ),
             "spark.sql.catalog.lakekeeper.s3.path-style-access": "true",
             "spark.sql.session.timeZone": "Asia/Tehran",
+            "spark.sql.parquet.enableVectorizedReader": "false",
             "spark.hadoop.fs.s3a.endpoint": "http://minio:9000",
             "spark.hadoop.fs.s3a.path.style.access": "true",
             "spark.hadoop.fs.s3a.connection.ssl.enabled": "false",
@@ -79,5 +93,8 @@ with DAG(
         env_vars={
             "PYTHONPATH": "/opt/spark-apps",
         },
+        driver_memory="2g",
+        executor_memory="4g",
+        executor_cores=2,
         verbose=True,
     )

@@ -72,7 +72,7 @@ def create_silver_behavioral_spark_session(
         .config("spark.sql.shuffle.partitions", str(cfg.shuffle_partitions))
         .config("spark.sql.adaptive.enabled", "true")
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
-        .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+        .config("spark.serializer", "org.apache.spark.serializer.JavaSerializer")
     )
 
     driver_memory = os.getenv("BEHAVIORAL_SPARK_DRIVER_MEMORY")
