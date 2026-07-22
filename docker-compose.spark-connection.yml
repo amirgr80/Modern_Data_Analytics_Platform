@@ -1,0 +1,14 @@
+services:
+  airflow-apiserver:
+    environment:
+      AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+
+  airflow-scheduler:
+    environment:
+      AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+
+  airflow-worker:
+    environment:
+      AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+    volumes:
+      - ./src:/opt/spark-apps

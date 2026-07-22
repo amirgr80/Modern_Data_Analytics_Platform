@@ -3,6 +3,11 @@ import logging
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
+from common.silver_transactional_run_context import (
+    run_timestamp_column,
+)
+from pyspark.sql.window import Window
+
 
 logger = logging.getLogger(__name__)
 
@@ -300,14 +305,11 @@ def clean_product_price_history(
     )
 
 
+
 def remove_exact_duplicates(
     df: DataFrame,
     table_name: str,
 ) -> DataFrame:
-    # Remove duplicate business records using the natural record ID.
-    # Kafka technical metadata is intentionally ignored.
-
-
     record_id_fields = {
         "categories": ["category_id"],
         "users": ["user_id"],
@@ -319,8 +321,63 @@ def remove_exact_duplicates(
         ],
     }
 
-    return df.dropDuplicates(
-        record_id_fields[table_name]
+    merge_keys = record_id_fields[
+        table_name
+    ]
+
+    ordering_columns = [
+        "_kafka_timestamp",
+        "_kafka_partition",
+        "_kafka_offset",
+        "bronze_ingestion_timestamp",
+    ]
+
+    available_ordering = [
+        column_name
+        for column_name in ordering_columns
+        if column_name in df.columns
+    ]
+
+    if not available_ordering:
+        logger.warning(
+            "No deterministic ordering columns "
+            "were found for table '%s'.",
+            table_name,
+        )
+
+        return df.dropDuplicates(
+            merge_keys
+        )
+
+    ordering = [
+        F.col(column_name)
+        .desc_nulls_last()
+        for column_name in available_ordering
+    ]
+
+    record_window = (
+        Window
+        .partitionBy(*merge_keys)
+        .orderBy(*ordering)
+    )
+
+    return (
+        df
+        .withColumn(
+            "__transactional_dedup_rank",
+            F.row_number().over(
+                record_window
+            ),
+        )
+        .where(
+            F.col(
+                "__transactional_dedup_rank"
+            )
+            == 1
+        )
+        .drop(
+            "__transactional_dedup_rank"
+        )
     )
 
 
@@ -329,7 +386,7 @@ def add_cleaning_metadata(
 ) -> DataFrame:
     return df.withColumn(
         "silver_cleaned_at",
-        F.current_timestamp(),
+        run_timestamp_column(),
     )
 
 

@@ -5,7 +5,7 @@ from pyspark.sql import SparkSession
 
 DEFAULT_CATALOG_NAME = "lakekeeper"
 DEFAULT_REST_URI = "http://lakekeeper:8181/catalog"
-DEFAULT_WAREHOUSE = "s3://warehouse"
+DEFAULT_WAREHOUSE = "silver"
 DEFAULT_MINIO_ENDPOINT = "http://minio:9000"
 
 
@@ -67,6 +67,10 @@ def create_iceberg_spark_session(
         SparkSession.builder
         .appName(app_name)
         .config(
+            "spark.serializer",
+            "org.apache.spark.serializer.JavaSerializer",
+        )
+        .config(
             "spark.sql.extensions",
             "org.apache.iceberg.spark.extensions."
             "IcebergSparkSessionExtensions",
@@ -116,8 +120,44 @@ def create_iceberg_spark_session(
             "us-east-1",
         )
         .config(
+            "spark.hadoop.fs.s3a.impl",
+            "org.apache.hadoop.fs.s3a.S3AFileSystem",
+        )
+        .config(
+            "spark.hadoop.fs.s3a.endpoint",
+            minio_endpoint,
+        )
+        .config(
+            "spark.hadoop.fs.s3a.path.style.access",
+            "true",
+        )
+        .config(
+            "spark.hadoop.fs.s3a.connection.ssl.enabled",
+            "false",
+        )
+        .config(
+            "spark.hadoop.fs.s3a.access.key",
+            minio_access_key,
+        )
+        .config(
+            "spark.hadoop.fs.s3a.secret.key",
+            minio_secret_key,
+        )
+        .config(
+            "spark.hadoop.fs.s3a.aws.credentials.provider",
+            "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
+        )
+        .config(
             "spark.sql.defaultCatalog",
             catalog_name,
+        )
+        .config(
+            "spark.sql.session.timeZone",
+            "Asia/Tehran",
+        )
+        .config(
+            "spark.sql.parquet.enableVectorizedReader",
+            "false",
         )
         .getOrCreate()
     )
