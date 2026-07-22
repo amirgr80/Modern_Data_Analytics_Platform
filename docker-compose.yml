@@ -535,7 +535,7 @@ services:
   # ===== END ADDED =====
 
   clickhouse:
-    image: docker.arvancloud.ir/clickhouse/clickhouse-server:24.8
+    image: docker.arvancloud.ir/clickhouse/clickhouse-server:latest
     container_name: clickhouse
     environment:
       CLICKHOUSE_DB: lakehouse
