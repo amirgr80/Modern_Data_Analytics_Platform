@@ -1,5 +1,3 @@
-CREATE DATABASE IF NOT EXISTS lakehouse;
-
 CREATE TABLE IF NOT EXISTS lakehouse.transactional_obt
 (
     order_item_id           String,
@@ -42,4 +40,4 @@ CREATE TABLE IF NOT EXISTS lakehouse.transactional_obt
 ENGINE = ReplacingMergeTree(silver_updated_at)
 PARTITION BY toYYYYMM(full_date)
 ORDER BY (full_date, category_id, product_id, order_id, order_item_id)
-SETTINGS index_granularity = 8192;
+SETTINGS index_granularity = 8192, allow_nullable_key = 1;
