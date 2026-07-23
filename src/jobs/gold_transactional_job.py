@@ -6,7 +6,6 @@ import sys
 
 from pyspark.sql import DataFrame, SparkSession
 
-from common.silver_transactional_spark_session import create_iceberg_spark_session
 from common.gold_transactional_config import GoldTransactionalConfig, OBT_COLUMNS
 from common.gold_transactional_transform import build_transactional_obt
 from common.gold_transactional_clickhouse import write_partition, TransactionalObtWriteError
@@ -54,7 +53,8 @@ def validate_obt(obt_df: DataFrame) -> None:
 
 
 def run(order_date: str) -> None:
-    spark: SparkSession = create_iceberg_spark_session(app_name="GoldTransactionalJob")
+    # 🔧 استفاده از SparkSession.builder به‌جای create_iceberg_spark_session
+    spark = SparkSession.builder.appName("GoldTransactionalJob").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
 
     config = GoldTransactionalConfig.from_env()
