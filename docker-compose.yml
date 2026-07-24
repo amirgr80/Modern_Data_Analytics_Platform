@@ -582,7 +582,7 @@ services:
       - datalake
 
   metabase:
-    image: docker.arvancloud.ir/metabase/metabase:v0.51.4
+    image: docker.arvancloud.ir/lucasluanp/metabase-with-clickhouse@sha256:136f8d40303d8ce1e32615ad3350ec160d845af7e116ff9e78577c24e42e9b8f
     container_name: metabase
     environment:
       MB_DB_TYPE: postgres
