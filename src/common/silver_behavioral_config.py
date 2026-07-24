@@ -182,19 +182,19 @@ class BehavioralRuntimeConfig:
             source, "ICEBERG_REST_URI", "http://lakekeeper:8181/catalog"
         )
         raw_warehouse = _get(source, "BEHAVIORAL_ICEBERG_WAREHOUSE") or _get(
-            source, "ICEBERG_WAREHOUSE", "warehouse"
+            source, "ICEBERG_WAREHOUSE", "silver"
         )
         warehouse = _normalize_lakekeeper_warehouse(rest_uri, raw_warehouse, source)
 
         namespace = _get(
             source,
             "BEHAVIORAL_ICEBERG_NAMESPACE",
-            "silver_behavioral",
+            "behavioral",
         )
         quality_namespace = _get(
             source,
             "BEHAVIORAL_QUALITY_NAMESPACE",
-            "silver_behavioral_quality",
+            "behavioral_quality",
         )
 
         minio_endpoint = _get(source, "MINIO_ENDPOINT", "http://minio:9000")

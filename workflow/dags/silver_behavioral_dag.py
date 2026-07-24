@@ -25,8 +25,9 @@ SPARK_PACKAGES = spark_packages_csv()
 # Scheduled runs process the date at the beginning of their data interval.
 # Manual runs may pass {"execution_date": "YYYY-MM-DD"} in dag_run.conf.
 PROCESS_DATE_TEMPLATE = (
-    "{{ dag_run.conf.get('execution_date', "
-    "data_interval_start.in_timezone('Asia/Tehran').to_date_string()) }}"
+    "{{ dag_run.conf['execution_date'] "
+    "if dag_run.conf.get('execution_date') "
+    "else data_interval_start.in_timezone('Asia/Tehran').to_date_string() }}"
 )
 
 
@@ -80,14 +81,17 @@ with DAG(
         env={
             "BEHAVIORAL_SPARK_MASTER_URL": "spark://spark-master:7077",
             "BEHAVIORAL_ICEBERG_REST_URI": "http://lakekeeper:8181/catalog",
-            "BEHAVIORAL_ICEBERG_WAREHOUSE": "warehouse",
-            "BEHAVIORAL_ICEBERG_NAMESPACE": "silver_behavioral",
-            "BEHAVIORAL_QUALITY_NAMESPACE": "silver_behavioral_quality",
+            "BEHAVIORAL_ICEBERG_WAREHOUSE": "silver",
+            "BEHAVIORAL_ICEBERG_NAMESPACE": "behavioral",
+            "BEHAVIORAL_QUALITY_NAMESPACE": "behavioral_quality",
         },
         bash_command=(
             "set -euo pipefail; "
             "spark-submit "
             "--master 'spark://spark-master:7077' "
+            "--driver-memory '2g' "
+            "--executor-memory '4g' "
+            "--executor-cores '2' "
             f"--packages '{SPARK_PACKAGES}' "
             f"'{SILVER_JOB_PATH}' "
             f"--execution-date '{PROCESS_DATE_TEMPLATE}'"

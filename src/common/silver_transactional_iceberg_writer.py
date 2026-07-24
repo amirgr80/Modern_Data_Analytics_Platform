@@ -76,7 +76,7 @@ class SilverTransactionalIcebergWriter:
         self,
         spark: SparkSession,
         catalog: str = "lakekeeper",
-        namespace: str = "silver",
+        namespace: str = "transactional",
         table_specs: Mapping[str, IcebergTableSpec] | None = None,
     ) -> None:
         self.spark = spark
@@ -192,10 +192,43 @@ TBLPROPERTIES (
         full_table_name: str,
         merge_keys: Sequence[str],
     ) -> None:
-        source_view = f"_silver_source_{uuid.uuid4().hex}"
-        dataframe.createOrReplaceTempView(source_view)
+        # Iceberg validates MERGE source determinism before Spark can
+        # prune unused non-deterministic Bronze lineage. Materializing
+        # here creates a deterministic LogicalRDD boundary.
+        materialized_source = dataframe.localCheckpoint(
+            eager=True
+        )
+
+        source_view = (
+            f"_silver_source_{uuid.uuid4().hex}"
+        )
 
         try:
+            analyzed_plan = (
+                materialized_source
+                ._jdf
+                .queryExecution()
+                .analyzed()
+            )
+
+            if not bool(
+                analyzed_plan.deterministic()
+            ):
+                raise RuntimeError(
+                    "Materialized MERGE source for "
+                    f"{full_table_name} is still "
+                    "non-deterministic."
+                )
+
+            materialized_source.createOrReplaceTempView(
+                source_view
+            )
+
+            logger.info(
+                "Materialized deterministic MERGE source "
+                "for %s.",
+                full_table_name,
+            )
             merge_condition = " AND ".join(
                 f"target.{self._quote(key)} = source.{self._quote(key)}"
                 for key in merge_keys
@@ -203,7 +236,7 @@ TBLPROPERTIES (
 
             update_columns = [
                 column
-                for column in dataframe.columns
+                for column in materialized_source.columns
                 if column not in set(merge_keys)
                 and column != "silver_created_at"
             ]
@@ -214,10 +247,10 @@ TBLPROPERTIES (
             )
 
             insert_columns = ", ".join(
-                self._quote(column) for column in dataframe.columns
+                self._quote(column) for column in materialized_source.columns
             )
             insert_values = ", ".join(
-                f"source.{self._quote(column)}" for column in dataframe.columns
+                f"source.{self._quote(column)}" for column in materialized_source.columns
             )
 
             matched_clause = ""
@@ -242,7 +275,13 @@ VALUES (
 
             self.spark.sql(merge_sql)
         finally:
-            self.spark.catalog.dropTempView(source_view)
+            self.spark.catalog.dropTempView(
+                source_view
+            )
+
+            materialized_source.unpersist(
+                blocking=False
+            )
 
     # ------------------------------------------------------------------
     # Validation and helpers

@@ -3,6 +3,10 @@ from dataclasses import dataclass
 
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
+
+from common.silver_transactional_run_context import (
+    run_timestamp_column,
+)
 from pyspark.sql.types import BinaryType
 
 
@@ -249,7 +253,7 @@ def build_quality_issues(validated_df: DataFrame, table_name: str) -> DataFrame:
         F.col("_kafka_offset"),
         F.col("_kafka_timestamp"),
         F.col("bronze_ingestion_timestamp"),
-        F.current_timestamp().alias("detected_at")
+        run_timestamp_column().alias("detected_at")
     ]
 
     return (
