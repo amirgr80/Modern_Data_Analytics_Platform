@@ -150,7 +150,7 @@ def replace_behavioral_gold_partition(
         # is a cheap DROP PARTITION rather than a table-wide DELETE mutation.
         client.command(
             f"ALTER TABLE {config.qualified_clickhouse_table} "
-            f"DROP PARTITION toDate('{partition}')",
+            f"DROP PARTITION '{partition}'",
             settings={"mutations_sync": 2},
         )
 
