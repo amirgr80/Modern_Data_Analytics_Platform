@@ -9,7 +9,7 @@ from typing import Iterable, Sequence
 import clickhouse_connect
 from pyspark.sql import DataFrame
 
-from gold.behavioral_gold_config import GoldBehavioralConfig
+from common.behavioral_gold_config import GoldBehavioralConfig
 
 
 logger = logging.getLogger(__name__)

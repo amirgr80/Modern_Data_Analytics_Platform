@@ -18,9 +18,9 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
 from common.silver_behavioral_spark_session import create_silver_behavioral_spark_session
-from gold.behavioral_gold_clickhouse import replace_behavioral_gold_partition
-from gold.behavioral_gold_config import GoldBehavioralConfig
-from gold.behavioral_gold_transform import build_behavioral_gold_obt
+from common.behavioral_gold_clickhouse import replace_behavioral_gold_partition
+from common.behavioral_gold_config import GoldBehavioralConfig
+from common.behavioral_gold_transform import build_behavioral_gold_obt
 
 
 logging.basicConfig(

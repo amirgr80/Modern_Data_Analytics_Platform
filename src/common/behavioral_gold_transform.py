@@ -8,7 +8,7 @@ from typing import Iterable
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-from gold.behavioral_gold_config import GoldBehavioralConfig
+from common.behavioral_gold_config import GoldBehavioralConfig
 
 
 REQUIRED_FACT_COLUMNS = {
