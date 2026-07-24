@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 import logging
-from typing import Iterable, Sequence
+from typing import Iterable
 
 import clickhouse_connect
 from pyspark.sql import DataFrame
@@ -13,6 +13,11 @@ from common.behavioral_gold_config import GoldBehavioralConfig
 
 
 logger = logging.getLogger(__name__)
+
+
+class BehavioralGoldWriteError(RuntimeError):
+    """Raised when writing Behavioral Gold to ClickHouse fails."""
+    pass
 
 
 CREATE_BEHAVIORAL_GOLD_TABLE_SQL = """
@@ -71,7 +76,7 @@ CREATE TABLE IF NOT EXISTS {database}.{table} (
     gold_loaded_at DateTime64(3, 'Asia/Tehran')
 )
 ENGINE = ReplacingMergeTree(gold_loaded_at)
-PARTITION BY toYYYYMM(event_timestamp)
+PARTITION BY processing_date
 ORDER BY (
     processing_date,
     ifNull(event_category, ''),
@@ -105,17 +110,6 @@ def ensure_behavioral_gold_table(config: GoldBehavioralConfig) -> None:
     )
 
 
-def _rows_in_batches(df: DataFrame, columns: Sequence[str], batch_size: int):
-    batch = []
-    for row in df.select(*columns).toLocalIterator():
-        batch.append(tuple(row[column] for column in columns))
-        if len(batch) >= batch_size:
-            yield batch
-            batch = []
-    if batch:
-        yield batch
-
-
 def _assert_target_columns(df: DataFrame, columns: Iterable[str]) -> None:
     missing = sorted(set(columns) - set(df.columns))
     if missing:
@@ -131,37 +125,59 @@ def replace_behavioral_gold_partition(
 
     columns = config.target_columns
     _assert_target_columns(df, columns)
-    source_count = df.count()
+
+    # Collect the day's partition to the driver as pandas and bulk-insert it,
+    # mirroring Gold Transactional. Ordering the columns here guarantees the
+    # DataFrame matches the ClickHouse column list passed to insert_df.
+    pandas_df = df.select(*columns).toPandas()
+    source_count = len(pandas_df)
     if source_count == 0:
         logger.warning("No Behavioral Gold rows found for %s", execution_date)
         return 0
 
+    partition = execution_date.isoformat()
     client = create_clickhouse_client(config)
-    client.command(f"CREATE DATABASE IF NOT EXISTS {config.clickhouse_database}")
-    client.command(
-        CREATE_BEHAVIORAL_GOLD_TABLE_SQL.format(
-            database=config.clickhouse_database,
-            table=config.clickhouse_table,
+    try:
+        client.command(f"CREATE DATABASE IF NOT EXISTS {config.clickhouse_database}")
+        client.command(
+            CREATE_BEHAVIORAL_GOLD_TABLE_SQL.format(
+                database=config.clickhouse_database,
+                table=config.clickhouse_table,
+            )
         )
-    )
-    client.command(
-        f"ALTER TABLE {config.qualified_clickhouse_table} "
-        f"DELETE WHERE processing_date = toDate('{execution_date.isoformat()}')",
-        settings={"mutations_sync": 2},
-    )
 
-    inserted = 0
-    for batch in _rows_in_batches(df, columns, config.insert_batch_size):
-        client.insert(
-            config.qualified_clickhouse_table,
-            batch,
+        # The table is partitioned by processing_date, so an idempotent reload
+        # is a cheap DROP PARTITION rather than a table-wide DELETE mutation.
+        client.command(
+            f"ALTER TABLE {config.qualified_clickhouse_table} "
+            f"DROP PARTITION toDate('{partition}')",
+            settings={"mutations_sync": 2},
+        )
+
+        client.insert_df(
+            table=config.qualified_clickhouse_table,
+            df=pandas_df,
             column_names=list(columns),
         )
-        inserted += len(batch)
 
-    if inserted != source_count:
-        raise RuntimeError(
-            f"ClickHouse insert count mismatch: source={source_count}, inserted={inserted}."
-        )
-    logger.info("Inserted %s Behavioral Gold rows for %s", inserted, execution_date)
-    return inserted
+        loaded = _count_partition_rows(client, config, partition)
+        if loaded != source_count:
+            raise BehavioralGoldWriteError(
+                f"ClickHouse insert count mismatch: source={source_count}, loaded={loaded}."
+            )
+        logger.info("Inserted %s Behavioral Gold rows for %s", loaded, execution_date)
+        return loaded
+    finally:
+        client.close()
+
+
+def _count_partition_rows(
+    client,
+    config: GoldBehavioralConfig,
+    partition: str,
+) -> int:
+    result = client.query(
+        f"SELECT count() FROM {config.qualified_clickhouse_table} "
+        f"WHERE processing_date = toDate('{partition}')"
+    )
+    return int(result.result_rows[0][0])

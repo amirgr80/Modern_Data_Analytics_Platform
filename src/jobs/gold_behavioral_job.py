@@ -48,6 +48,12 @@ def _assert_gold_contract(df: DataFrame, expected_columns: tuple[str, ...]) -> N
         raise RuntimeError("Behavioral Gold OBT produced a null event_key.")
     if df.filter(F.col("event_timestamp").isNull()).limit(1).count():
         raise RuntimeError("Behavioral Gold OBT produced a null event_timestamp.")
+    if df.filter(F.col("date_key").isNull()).limit(1).count():
+        raise RuntimeError("Behavioral Gold OBT produced a null date_key.")
+    if df.filter(F.col("silver_ingestion_timestamp").isNull()).limit(1).count():
+        raise RuntimeError(
+            "Behavioral Gold OBT produced a null silver_ingestion_timestamp."
+        )
     duplicates = (
         df.groupBy("event_key")
         .count()

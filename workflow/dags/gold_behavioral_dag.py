@@ -9,6 +9,7 @@ import pendulum
 from airflow import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.providers.standard.operators.python import PythonOperator
+from airflow.sensors.external_task import ExternalTaskSensor
 
 
 SRC_PATH = os.getenv("PIPELINE_SRC_PATH", "/opt/airflow/src")
@@ -21,6 +22,10 @@ from common.silver_behavioral_config import spark_packages_csv
 TEHRAN_TZ = pendulum.timezone("Asia/Tehran")
 GOLD_JOB_PATH = "/opt/airflow/src/jobs/gold_behavioral_job.py"
 SPARK_PACKAGES = spark_packages_csv()
+
+# Upstream Silver Behavioral DAG whose success we wait on before loading Gold.
+SILVER_DAG_ID = "silver_behavioral_etl_v2"
+SILVER_SUCCESS_TASK_ID = "run_silver_behavioral_job_v2"
 
 PROCESS_DATE_TEMPLATE = (
     "{{ dag_run.conf.get('execution_date', "
@@ -41,32 +46,6 @@ def check_clickhouse_ready() -> None:
     client.command("SELECT 1")
 
 
-def check_silver_behavioral_state(execution_date: str) -> None:
-    from common.silver_behavioral_config import BehavioralRuntimeConfig
-    from common.silver_behavioral_spark_session import create_silver_behavioral_spark_session
-    from common.silver_behavioral_schema import TABLE_PIPELINE_STATE
-
-    config = BehavioralRuntimeConfig.from_env()
-    spark = create_silver_behavioral_spark_session(
-        app_name=f"gold-behavioral-precheck-{execution_date}",
-        config=config,
-    )
-    try:
-        state_table = config.qualified_table(TABLE_PIPELINE_STATE)
-        succeeded = (
-            spark.table(state_table)
-            .where(f"execution_date = DATE '{execution_date}' AND status = 'SUCCEEDED'")
-            .limit(1)
-            .count()
-        )
-        if succeeded == 0:
-            raise RuntimeError(
-                f"Silver Behavioral has no SUCCEEDED state for {execution_date}."
-            )
-    finally:
-        spark.stop()
-
-
 default_args = {
     "owner": "gold-behavioral",
     "depends_on_past": False,
@@ -85,10 +64,18 @@ with DAG(
     max_active_runs=1,
     tags=["gold", "behavioral", "clickhouse"],
 ) as dag:
-    check_silver = PythonOperator(
+    check_silver = ExternalTaskSensor(
         task_id="check_silver_behavioral_succeeded",
-        python_callable=check_silver_behavioral_state,
-        op_kwargs={"execution_date": PROCESS_DATE_TEMPLATE},
+        external_dag_id=SILVER_DAG_ID,
+        external_task_id=SILVER_SUCCESS_TASK_ID,
+        # Silver runs at 02:00 and Gold at 03:00, so Gold's logical date is one
+        # hour ahead of the Silver run it depends on. Subtract that hour or the
+        # sensor waits for a Silver run that never shares Gold's logical date.
+        execution_delta=pendulum.duration(hours=1),
+        allowed_states=["success"],
+        mode="reschedule",
+        timeout=3600,
+        poke_interval=60,
     )
 
     check_clickhouse = PythonOperator(
@@ -102,9 +89,9 @@ with DAG(
         env={
             "BEHAVIORAL_SPARK_MASTER_URL": "spark://spark-master:7077",
             "BEHAVIORAL_ICEBERG_REST_URI": "http://lakekeeper:8181/catalog",
-            "BEHAVIORAL_ICEBERG_WAREHOUSE": "warehouse",
-            "BEHAVIORAL_ICEBERG_NAMESPACE": "silver_behavioral",
-            "BEHAVIORAL_QUALITY_NAMESPACE": "silver_behavioral_quality",
+            "BEHAVIORAL_ICEBERG_WAREHOUSE": "silver",
+            "BEHAVIORAL_ICEBERG_NAMESPACE": "behavioral",
+            "BEHAVIORAL_QUALITY_NAMESPACE": "behavioral_quality",
             "CLICKHOUSE_HOST": "clickhouse",
             "CLICKHOUSE_HTTP_PORT": "8123",
             "CLICKHOUSE_DB": "lakehouse",
@@ -114,6 +101,9 @@ with DAG(
             "set -euo pipefail; "
             "spark-submit "
             "--master 'spark://spark-master:7077' "
+            "--driver-memory '2g' "
+            "--executor-memory '4g' "
+            "--executor-cores '2' "
             f"--packages '{SPARK_PACKAGES}' "
             f"'{GOLD_JOB_PATH}' "
             f"--execution-date '{PROCESS_DATE_TEMPLATE}'"

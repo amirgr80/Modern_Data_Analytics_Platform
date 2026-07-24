@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS lakehouse.behavioral_obt (
     gold_loaded_at DateTime64(3, 'Asia/Tehran')
 )
 ENGINE = ReplacingMergeTree(gold_loaded_at)
-PARTITION BY toYYYYMM(event_timestamp)
+PARTITION BY processing_date
 ORDER BY (
     processing_date,
     ifNull(event_category, ''),

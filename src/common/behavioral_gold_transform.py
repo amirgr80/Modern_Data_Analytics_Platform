@@ -20,6 +20,19 @@ REQUIRED_FACT_COLUMNS = {
     "session_key",
 }
 
+REQUIRED_DEVICE_COLUMNS = {"device_key", "device_name"}
+
+REQUIRED_EVENT_TYPE_COLUMNS = {"event_type_key", "event_category"}
+
+REQUIRED_SESSION_COLUMNS = {
+    "session_key",
+    "session_start_at",
+    "session_end_at",
+    "session_duration_sec",
+    "primary_device_key",
+    "event_count",
+}
+
 
 def _require_columns(df: DataFrame, required: Iterable[str], name: str) -> None:
     missing = sorted(set(required) - set(df.columns))
@@ -39,15 +52,25 @@ def build_behavioral_gold_obt(
     )
     _require_columns(fact, REQUIRED_FACT_COLUMNS, config.fact_table)
 
-    device = spark.table(config.device_table).select(
+    device_src = spark.table(config.device_table)
+    _require_columns(device_src, REQUIRED_DEVICE_COLUMNS, config.device_table)
+    device = device_src.select(
         "device_key",
         F.col("device_name").alias("dim_device_name"),
     )
-    event_type = spark.table(config.event_type_table).select(
+
+    event_type_src = spark.table(config.event_type_table)
+    _require_columns(
+        event_type_src, REQUIRED_EVENT_TYPE_COLUMNS, config.event_type_table
+    )
+    event_type = event_type_src.select(
         "event_type_key",
         F.col("event_category").alias("dim_event_category"),
     )
-    session = spark.table(config.session_table).select(
+
+    session_src = spark.table(config.session_table)
+    _require_columns(session_src, REQUIRED_SESSION_COLUMNS, config.session_table)
+    session = session_src.select(
         "session_key",
         F.col("session_start_at").alias("dim_session_start_at"),
         F.col("session_end_at").alias("dim_session_end_at"),
