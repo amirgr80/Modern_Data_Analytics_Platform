@@ -1,1 +1,0 @@
-"""Behavioral Gold package."""
