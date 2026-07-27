@@ -1,3 +1,5 @@
+# common/gold_transactional_transform.py
+
 from __future__ import annotations
 
 from pyspark.sql import DataFrame, SparkSession
@@ -95,4 +97,22 @@ def build_transactional_obt(
         ).alias("silver_updated_at"),
     )
 
-    return obt.select(*OBT_COLUMNS)
+    obt = obt.select(*OBT_COLUMNS)
+
+    null_category_count = obt.filter(F.col("category_id").isNull()).count()
+    total_count = obt.count()
+    print(f"=== CATEGORY DEBUG === total={total_count} | null_category_id={null_category_count}")
+
+    if null_category_count > 0:
+        print("Sample rows with null category:")
+        obt.filter(F.col("category_id").isNull()).select(
+            "order_item_id", "product_id", "category_id", "category_name"
+        ).show(10, False)
+
+        print("Sample dim_product.category_id:")
+        dim_product.select("product_id", "category_id").show(10, False)
+
+        print("Sample dim_category:")
+        dim_category.select("category_id", "category_name").show(10, False)
+
+    return obt
