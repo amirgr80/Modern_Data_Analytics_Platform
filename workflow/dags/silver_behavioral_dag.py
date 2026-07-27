@@ -27,7 +27,7 @@ SPARK_PACKAGES = spark_packages_csv()
 PROCESS_DATE_TEMPLATE = (
     "{{ dag_run.conf['execution_date'] "
     "if dag_run.conf.get('execution_date') "
-    "else data_interval_start.in_timezone('Asia/Tehran').to_date_string() }}"
+    "else data_interval_start.in_timezone('Asia/Tehran').subtract(days=1).to_date_string() }}"
 )
 
 
