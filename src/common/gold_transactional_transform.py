@@ -18,8 +18,7 @@ def build_transactional_obt(
     dim_product_price_scd = spark.table(
         config.silver_table("dim_product_price_scd")
     )
-    dim_category = spark.table(config.silver_table("dim_category"))
-
+    dim_category = spark.table(config.silver_table("dim_category")) 
     order_item = fact_order_item.alias("oi").join(
         fact_order.alias("o"),
         on=F.col("oi.order_id") == F.col("o.order_id"),
@@ -57,6 +56,7 @@ def build_transactional_obt(
         F.col("oi.order_id").alias("order_id"),
         F.col("oi.product_id").alias("product_id"),
         F.col("c.category_id").alias("category_id"),
+        F.col("c.category_name").alias("category_name"),
         F.col("o.user_id").alias("user_id"),
         F.col("price.price_history_id").alias("price_history_id"),
         F.col("oi.order_date_key").alias("date_key"),
@@ -76,7 +76,6 @@ def build_transactional_obt(
         F.col("oi.price_difference").cast("decimal(29,2)").alias("price_difference"),
         F.col("o.total_amount").cast("decimal(29,2)").alias("order_total_amount"),
         F.col("p.product_name").alias("product_name"),
-        F.col("c.category_name").alias("category_name"),
         F.col("u.username").alias("username"),
         F.col("u.email").alias("email"),
         F.col("u.signup_date").cast("date").alias("signup_date"),
