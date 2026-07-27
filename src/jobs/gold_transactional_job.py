@@ -53,7 +53,6 @@ def validate_obt(obt_df: DataFrame) -> None:
 
 
 def run(order_date: str) -> None:
-    # 🔧 استفاده از SparkSession.builder به‌جای create_iceberg_spark_session
     spark = SparkSession.builder.appName("GoldTransactionalJob").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
 

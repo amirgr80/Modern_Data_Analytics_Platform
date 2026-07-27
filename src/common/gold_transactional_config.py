@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import os
@@ -59,24 +60,19 @@ class GoldTransactionalConfig:
     clickhouse_table: str = "transactional_obt"
     obt_columns: tuple[str, ...] = field(default_factory=lambda: OBT_COLUMNS)
 
-
-
     @classmethod
     def from_env(cls) -> "GoldTransactionalConfig":
         return cls(
             iceberg_catalog=os.environ.get("ICEBERG_CATALOG_NAME", "lakekeeper"),
             iceberg_rest_uri=_require_env("ICEBERG_REST_URI"),
             iceberg_warehouse=os.environ.get("ICEBERG_WAREHOUSE", "silver"),
-            iceberg_namespace="transactional",  
+            iceberg_namespace="transactional",
             clickhouse_host=_require_env("CLICKHOUSE_HOST"),
             clickhouse_http_port=int(os.environ.get("CLICKHOUSE_HTTP_PORT", "8123")),
             clickhouse_db=_require_env("CLICKHOUSE_DB"),
             clickhouse_user=_require_env("CLICKHOUSE_USER"),
             clickhouse_password=_require_env("CLICKHOUSE_PASSWORD"),
-        )   
-
-
-
+        )
 
     def silver_table(self, logical_name: str) -> str:
         return f"{self.iceberg_catalog}.{self.iceberg_namespace}.{logical_name}"

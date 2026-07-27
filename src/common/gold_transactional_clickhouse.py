@@ -1,3 +1,5 @@
+# common/gold_transactional_clickhouse.py
+
 from __future__ import annotations
 
 import logging
