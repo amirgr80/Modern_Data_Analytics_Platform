@@ -67,7 +67,7 @@ class GoldTransactionalConfig:
             iceberg_catalog=os.environ.get("ICEBERG_CATALOG_NAME", "lakekeeper"),
             iceberg_rest_uri=_require_env("ICEBERG_REST_URI"),
             iceberg_warehouse=os.environ.get("ICEBERG_WAREHOUSE", "silver"),
-            iceberg_namespace="transactional",  # 🔥 override
+            iceberg_namespace="transactional",  
             clickhouse_host=_require_env("CLICKHOUSE_HOST"),
             clickhouse_http_port=int(os.environ.get("CLICKHOUSE_HTTP_PORT", "8123")),
             clickhouse_db=_require_env("CLICKHOUSE_DB"),
