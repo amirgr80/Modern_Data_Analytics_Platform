@@ -280,8 +280,7 @@ def build_dim_product(
 
     joined = products.join(
         categories,
-        F.col("p.category")
-        == F.col("c.category_id"),
+        F.trim(F.lower(F.col("p.category"))) == F.trim(F.lower(F.col("c.category_name"))),
         "left",
     )
 
@@ -296,45 +295,20 @@ def build_dim_product(
         )
         .select(
             "product_key",
-
-            F.col("p.product_id").alias(
-                "product_id"
-            ),
-
-            F.col("p.name").alias(
-                "product_name"
-            ),
-
-            F.col("c.category_key").alias(
-                "category_key"
-            ),
-
-            F.col("p.category").alias(
-                "category_id"
-            ),
-
-            F.col("c.category_name").alias(
-                "category_name"
-            ),
-
+            F.col("p.product_id").alias("product_id"),
+            F.col("p.name").alias("product_name"),
+            F.col("c.category_key").alias("category_key"),
+            F.col("c.category_id").alias("category_id"),     
+            F.col("c.category_name").alias("category_name"), 
             *[
-                F.col(
-                    f"p.{column_name}"
-                ).alias(column_name)
-                for column_name in [
-                    "price",
-                    "inventory",
-                    "popularity_score",
-                ]
-                if column_name
-                in products_df.columns
+                F.col(f"p.{column_name}").alias(column_name)
+                for column_name in ["price", "inventory", "popularity_score"]
+                if column_name in products_df.columns
             ],
         )
     )
 
-    return _add_audit_columns(
-        result
-    )
+    return _add_audit_columns(result)
 
 
 def build_dim_product_price_scd(
