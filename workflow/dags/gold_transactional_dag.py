@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../src"))
-
 import pendulum
 
 from airflow import DAG
@@ -11,8 +9,9 @@ from airflow.decorators import task
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from airflow.sensors.external_task import ExternalTaskSensor
 
-from common.gold_transactional_config import GoldTransactionalConfig
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
+from common.gold_transactional_config import GoldTransactionalConfig
 
 SILVER_DAG_ID = "silver_transactional_daily"
 SILVER_SUCCESS_TASK_ID = "write_kimball_tables"
