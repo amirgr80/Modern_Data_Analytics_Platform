@@ -117,4 +117,4 @@ with DAG(
         ),
     )
 
-    check_silver >> check_clickhouse >> run_job
+check_clickhouse >> run_job
