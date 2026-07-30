@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from common.gold_transactional_config import GoldTransactionalConfig
 
-SILVER_DAG_ID = "silver_transactional_daily"
+SILVER_DAG_ID = "silver_transactional_pipeline"
 SILVER_SUCCESS_TASK_ID = "write_kimball_tables"
 
 SPARK_APP_PATH = "/opt/airflow/src/jobs/gold_transactional_job.py"
