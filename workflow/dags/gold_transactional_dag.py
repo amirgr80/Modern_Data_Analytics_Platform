@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import os
+import zipfile
 import pendulum
 
 from airflow import DAG
@@ -18,6 +19,22 @@ SILVER_SUCCESS_TASK_ID = "run_silver_transactional_job"
 
 SPARK_APP_PATH = "/opt/airflow/src/jobs/gold_transactional_job.py"
 SPARK_CONN_ID = "spark_default"
+
+def create_common_zip():
+    zip_path = "/tmp/common.zip"
+    if os.path.exists(zip_path):
+        return zip_path
+    src_path = "/opt/airflow/src/common"
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for root, dirs, files in os.walk(src_path):
+            for file in files:
+                if file.endswith('.py'):
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, src_path)
+                    zipf.write(file_path, arcname)
+    return zip_path
+
+COMMON_ZIP = create_common_zip()
 
 
 @task.sensor(poke_interval=30, timeout=600, mode="reschedule")
@@ -58,7 +75,7 @@ with DAG(
         mode="reschedule",
         timeout=3600,
         poke_interval=60,
-        execution_delta=pendulum.duration(hours=1),  
+        execution_delta=pendulum.duration(hours=1),
     )
 
     clickhouse_ready = check_clickhouse_ready()
@@ -69,7 +86,7 @@ with DAG(
         application=SPARK_APP_PATH,
         application_args=["--order-date", "{{ ds }}"],
         name="gold_transactional_job_{{ ds }}",
-        py_files="/opt/airflow/src/common/",
+        py_files=COMMON_ZIP,  
     )
 
     wait_for_silver >> clickhouse_ready >> run_gold_job
