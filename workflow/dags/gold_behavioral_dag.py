@@ -27,17 +27,12 @@ SPARK_PACKAGES = spark_packages_csv()
 SILVER_DAG_ID = "silver_behavioral_etl_v2"
 SILVER_SUCCESS_TASK_ID = "run_silver_behavioral_job_v2"
 
-PROCESS_DATE_TEMPLATE = """
-{{
-    dag_run.conf.get(
-        'process_date',
-        data_interval_end
-            .in_timezone('Asia/Tehran')
-            .subtract(days=1)
-            .to_date_string()
-    )
-}}
-"""
+PROCESS_DATE_TEMPLATE = (
+    "{{ dag_run.conf.get("
+    "'process_date', "
+    "data_interval_end.in_timezone('Asia/Tehran').subtract(days=1).to_date_string()"
+    ") }}"
+)
 
 
 def check_clickhouse_ready() -> None:
