@@ -4,15 +4,11 @@ from datetime import datetime, timedelta
 
 from airflow import DAG
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
-from airflow.sensors.external_task import ExternalTaskSensor
 
 
 DAG_ID = "gold_transactional_daily"
 SPARK_CONNECTION_ID = "spark_default"
 APPLICATION_PATH = "/opt/spark-apps/jobs/gold_transactional_job.py"
-
-SILVER_DAG_ID = "silver_transactional_pipeline"
-SILVER_TASK_ID = "run_silver_transactional_job"
 
 
 default_args = {
@@ -31,23 +27,11 @@ with DAG(
     ),
     default_args=default_args,
     start_date=datetime(2026, 7, 1),
-    schedule="0 3 * * *",  
+    schedule="0 3 * * *",
     catchup=False,
     max_active_runs=1,
     tags=["gold", "transactional", "spark", "iceberg", "clickhouse"],
 ) as dag:
-
-    wait_for_silver = ExternalTaskSensor(
-        task_id="wait_for_silver",
-        external_dag_id=SILVER_DAG_ID,
-        external_task_id=SILVER_TASK_ID,
-        allowed_states=["success"],
-        failed_states=["failed", "skipped"],
-        mode="reschedule",
-        poke_interval=60,
-        timeout=60 * 60 * 2,  
-        execution_delta=timedelta(hours=1), 
-    )
 
     run_gold_job = SparkSubmitOperator(
         task_id="run_gold_transactional_job",
@@ -104,5 +88,3 @@ with DAG(
         executor_cores=2,
         verbose=True,
     )
-
-    wait_for_silver >> run_gold_job
