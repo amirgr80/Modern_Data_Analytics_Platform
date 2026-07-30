@@ -68,6 +68,7 @@ with DAG(
         application=SPARK_APP_PATH,
         application_args=["--order-date", "{{ ds }}"],
         name="gold_transactional_job_{{ ds }}",
+        py_files="/opt/airflow/src/common/", 
     )
 
     wait_for_silver >> clickhouse_ready >> run_gold_job
