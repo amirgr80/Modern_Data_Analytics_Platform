@@ -58,6 +58,7 @@ with DAG(
         mode="reschedule",
         timeout=3600,
         poke_interval=60,
+        execution_delta=pendulum.duration(hours=1),  
     )
 
     clickhouse_ready = check_clickhouse_ready()
