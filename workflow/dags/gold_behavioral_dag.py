@@ -66,19 +66,19 @@ with DAG(
     max_active_runs=1,
     tags=["gold", "behavioral", "clickhouse"],
 ) as dag:
-    check_silver = ExternalTaskSensor(
-        task_id="check_silver_behavioral_succeeded",
-        external_dag_id=SILVER_DAG_ID,
-        external_task_id=SILVER_SUCCESS_TASK_ID,
-        # Silver runs at 02:00 and Gold at 03:00, so Gold's logical date is one
-        # hour ahead of the Silver run it depends on. Subtract that hour or the
-        # sensor waits for a Silver run that never shares Gold's logical date.
-        execution_delta=pendulum.duration(hours=1),
-        allowed_states=["success"],
-        mode="reschedule",
-        timeout=3600,
-        poke_interval=60,
-    )
+    # check_silver = ExternalTaskSensor(
+    #     task_id="check_silver_behavioral_succeeded",
+    #     external_dag_id=SILVER_DAG_ID,
+    #     external_task_id=SILVER_SUCCESS_TASK_ID,
+    #     # Silver runs at 02:00 and Gold at 03:00, so Gold's logical date is one
+    #     # hour ahead of the Silver run it depends on. Subtract that hour or the
+    #     # sensor waits for a Silver run that never shares Gold's logical date.
+    #     execution_delta=pendulum.duration(hours=1),
+    #     allowed_states=["success"],
+    #     mode="reschedule",
+    #     timeout=3600,
+    #     poke_interval=60,
+    # )
 
     check_clickhouse = PythonOperator(
         task_id="check_clickhouse_ready",
