@@ -5,14 +5,10 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.decorators import task
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
-from airflow.sensors.external_task import ExternalTaskSensor
 
 DAG_ID = "gold_transactional_daily"
-SPARK_CONN_ID = "spark_default"
-APP_PATH = "/opt/spark-apps/jobs/gold_transactional_job.py"
-
-SILVER_DAG_ID = "silver_transactional_pipeline"
-SILVER_TASK_ID = "run_silver_transactional_job"
+SPARK_CONNECTION_ID = "spark_default"
+APPLICATION_PATH = "/opt/spark-apps/jobs/gold_transactional_job.py"
 
 default_args = {
     "owner": "data-engineering",
@@ -47,27 +43,16 @@ with DAG(
     schedule="0 3 * * *",
     catchup=False,
     max_active_runs=1,
-    tags=["gold", "transactional"],
+    tags=["gold", "transactional", "spark", "iceberg", "clickhouse"],
 ) as dag:
-
-    wait_for_silver = ExternalTaskSensor(
-        task_id="wait_for_silver",
-        external_dag_id=SILVER_DAG_ID,
-        external_task_id=SILVER_TASK_ID,
-        mode="reschedule",
-        timeout=7200,
-        poke_interval=60,
-        execution_delta=timedelta(hours=1),
-        allowed_states=["success"],
-    )
 
     clickhouse_ready = check_clickhouse_ready()
 
     run_gold_job = SparkSubmitOperator(
         task_id="run_gold_transactional_job",
-        conn_id=SPARK_CONN_ID,
-        application=APP_PATH,
-        name="gold_transactional_job_{{ ds }}",
+        conn_id=SPARK_CONNECTION_ID,
+        application=APPLICATION_PATH,
+        name="gold-transactional-job-{{ ds }}",
         packages=(
             "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.1,"
             "org.apache.iceberg:iceberg-aws-bundle:1.6.1,"
@@ -115,4 +100,4 @@ with DAG(
         verbose=True,
     )
 
-    wait_for_silver >> clickhouse_ready >> run_gold_job
+    clickhouse_ready >> run_gold_job
