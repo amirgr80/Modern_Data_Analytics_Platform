@@ -7,14 +7,12 @@ from airflow.decorators import task
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from airflow.sensors.external_task import ExternalTaskSensor
 
-
 DAG_ID = "gold_transactional_daily"
-SPARK_CONNECTION_ID = "spark_default"
-APPLICATION_PATH = "/opt/spark-apps/jobs/gold_transactional_job.py"
+SPARK_CONN_ID = "spark_default"
+APP_PATH = "/opt/spark-apps/jobs/gold_transactional_job.py"
 
 SILVER_DAG_ID = "silver_transactional_pipeline"
 SILVER_TASK_ID = "run_silver_transactional_job"
-
 
 default_args = {
     "owner": "data-engineering",
@@ -22,10 +20,6 @@ default_args = {
     "retries": 2,
     "retry_delay": timedelta(minutes=5),
 }
-
-
-def _silver_execution_date(dt: datetime):
-    return dt - timedelta(hours=1)
 
 
 @task.sensor(poke_interval=30, timeout=600, mode="reschedule")
@@ -48,37 +42,32 @@ def check_clickhouse_ready() -> bool:
 
 with DAG(
     dag_id=DAG_ID,
-    description=(
-        "Build Gold transactional OBT from Silver Iceberg "
-        "and load partition into ClickHouse."
-    ),
     default_args=default_args,
     start_date=datetime(2026, 7, 1),
     schedule="0 3 * * *",
     catchup=False,
     max_active_runs=1,
-    tags=["gold", "transactional", "spark", "iceberg", "clickhouse"],
+    tags=["gold", "transactional"],
 ) as dag:
 
     wait_for_silver = ExternalTaskSensor(
-        task_id="check_silver_transactional_succeeded",
+        task_id="wait_for_silver",
         external_dag_id=SILVER_DAG_ID,
         external_task_id=SILVER_TASK_ID,
-        allowed_states=["success"],
-        failed_states=["failed", "skipped"],
         mode="reschedule",
+        timeout=7200,
         poke_interval=60,
-        timeout=60 * 60 * 2,
-        execution_date_fn=_silver_execution_date,
+        execution_delta=timedelta(hours=1),
+        allowed_states=["success"],
     )
 
     clickhouse_ready = check_clickhouse_ready()
 
     run_gold_job = SparkSubmitOperator(
         task_id="run_gold_transactional_job",
-        conn_id=SPARK_CONNECTION_ID,
-        application=APPLICATION_PATH,
-        name="gold-transactional-job-{{ ds }}",
+        conn_id=SPARK_CONN_ID,
+        application=APP_PATH,
+        name="gold_transactional_job_{{ ds }}",
         packages=(
             "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.1,"
             "org.apache.iceberg:iceberg-aws-bundle:1.6.1,"
@@ -91,9 +80,7 @@ with DAG(
         ],
         conf={
             "spark.serializer": "org.apache.spark.serializer.JavaSerializer",
-            "spark.sql.extensions": (
-                "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
-            ),
+            "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
             "spark.sql.catalog.lakekeeper": "org.apache.iceberg.spark.SparkCatalog",
             "spark.sql.catalog.lakekeeper.type": "rest",
             "spark.sql.catalog.lakekeeper.uri": "http://lakekeeper:8181/catalog",
@@ -110,9 +97,7 @@ with DAG(
             "spark.hadoop.fs.s3a.endpoint": "http://minio:9000",
             "spark.hadoop.fs.s3a.path.style.access": "true",
             "spark.hadoop.fs.s3a.connection.ssl.enabled": "false",
-            "spark.hadoop.fs.s3a.aws.credentials.provider": (
-                "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"
-            ),
+            "spark.hadoop.fs.s3a.aws.credentials.provider": "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
             "spark.hadoop.fs.s3a.access.key": "minioadmin",
             "spark.hadoop.fs.s3a.secret.key": "minioadmin123",
         },
