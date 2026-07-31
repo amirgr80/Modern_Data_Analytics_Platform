@@ -24,6 +24,10 @@ default_args = {
 }
 
 
+def _silver_execution_date(dt: datetime):
+    return dt - timedelta(hours=1)
+
+
 @task.sensor(poke_interval=30, timeout=600, mode="reschedule")
 def check_clickhouse_ready() -> bool:
     import clickhouse_connect
@@ -65,7 +69,7 @@ with DAG(
         mode="reschedule",
         poke_interval=60,
         timeout=60 * 60 * 2,
-        execution_delta=timedelta(hours=1),
+        execution_date_fn=_silver_execution_date,
     )
 
     clickhouse_ready = check_clickhouse_ready()
