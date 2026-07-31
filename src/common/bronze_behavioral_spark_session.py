@@ -44,10 +44,50 @@ def create_bronze_behavioral_spark_session(app_name: str = "bronze-behavioral-jo
         )
     spark_packages = os.getenv("SPARK_PACKAGES", DEFAULT_SPARK_PACKAGES)
 
+    bronze_spark_cores_max = os.getenv(
+        "BRONZE_SPARK_CORES_MAX",
+        "1",
+    ).strip()
+
+    bronze_spark_executor_cores = os.getenv(
+        "BRONZE_SPARK_EXECUTOR_CORES",
+        "1",
+    ).strip()
+
+    for setting_name, setting_value in (
+        (
+            "BRONZE_SPARK_CORES_MAX",
+            bronze_spark_cores_max,
+        ),
+        (
+            "BRONZE_SPARK_EXECUTOR_CORES",
+            bronze_spark_executor_cores,
+        ),
+    ):
+        if (
+            not setting_value.isdigit()
+            or int(setting_value) < 1
+        ):
+            raise ValueError(
+                f"{setting_name} must be a "
+                f"positive integer; received "
+                f"{setting_value!r}"
+            )
+
     spark = (
         SparkSession.builder
         .appName(app_name)
         .master(spark_master)
+
+        # Limit total resources used by this Bronze application
+        .config(
+            "spark.cores.max",
+            bronze_spark_cores_max,
+        )
+        .config(
+            "spark.executor.cores",
+            bronze_spark_executor_cores,
+        )
         .config("spark.jars.packages", spark_packages)
         .config("spark.hadoop.fs.s3a.endpoint", minio_endpoint)
         .config("spark.hadoop.fs.s3a.access.key", minio_access_key)
