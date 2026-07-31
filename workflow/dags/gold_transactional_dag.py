@@ -1,103 +1,123 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+import os
+import sys
+import pendulum
 
 from airflow import DAG
-from airflow.decorators import task
-from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+from airflow.providers.standard.operators.bash import BashOperator
+from airflow.providers.standard.operators.python import PythonOperator
+from airflow.sensors.external_task import ExternalTaskSensor
 
-DAG_ID = "gold_transactional_daily"
-SPARK_CONNECTION_ID = "spark_default"
-APPLICATION_PATH = "/opt/spark-apps/jobs/gold_transactional_job.py"
+SRC_PATH = os.getenv("PIPELINE_SRC_PATH", "/opt/airflow/src")
+if SRC_PATH not in sys.path:
+    sys.path.insert(0, SRC_PATH)
 
-default_args = {
-    "owner": "data-engineering",
-    "depends_on_past": False,
-    "retries": 2,
-    "retry_delay": timedelta(minutes=5),
-}
+from common.gold_transactional_config import GoldTransactionalConfig
+
+TEHRAN_TZ = pendulum.timezone("Asia/Tehran")
+GOLD_JOB_PATH = "/opt/airflow/src/jobs/gold_transactional_job.py"
+
+config = GoldTransactionalConfig.from_env()
+SPARK_PACKAGES = (
+    "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.1,"
+    "org.apache.iceberg:iceberg-aws-bundle:1.6.1,"
+    "org.apache.hadoop:hadoop-aws:3.3.4,"
+    "com.amazonaws:aws-java-sdk-bundle:1.12.262"
+)
+
+SILVER_DAG_ID = "silver_transactional_pipeline"
+SILVER_SUCCESS_TASK_ID = "run_silver_transactional_job"
+
+PROCESS_DATE_TEMPLATE = (
+    "{{ dag_run.conf.get("
+    "'process_date', "
+    "data_interval_end.in_timezone('Asia/Tehran').subtract(days=1).to_date_string()"
+    ") }}"
+)
 
 
-@task.sensor(poke_interval=30, timeout=600, mode="reschedule")
-def check_clickhouse_ready() -> bool:
+def check_clickhouse_ready() -> None:
     import clickhouse_connect
 
     client = clickhouse_connect.get_client(
-        host="clickhouse",
-        port=8123,
-        username="default",
-        password="clickhouse123",
-        database="lakehouse",
+        host=config.clickhouse_host,
+        port=config.clickhouse_http_port,
+        username=config.clickhouse_user,
+        password=config.clickhouse_password,
+        database=config.clickhouse_db,
     )
-    try:
-        client.command("SELECT 1")
-        return True
-    finally:
-        client.close()
+    client.command("SELECT 1")
 
+
+default_args = {
+    "owner": "gold-transactional",
+    "depends_on_past": False,
+    "retries": 2,
+    "retry_delay": pendulum.duration(minutes=5),
+    "execution_timeout": pendulum.duration(hours=2),
+}
 
 with DAG(
-    dag_id=DAG_ID,
+    dag_id="gold_transactional_daily",
+    description="Load Silver Transactional Iceberg tables into ClickHouse Gold OBT",
     default_args=default_args,
-    start_date=datetime(2026, 7, 1),
     schedule="0 3 * * *",
+    start_date=pendulum.datetime(2026, 1, 1, tz=TEHRAN_TZ),
     catchup=False,
     max_active_runs=1,
-    tags=["gold", "transactional", "spark", "iceberg", "clickhouse"],
+    tags=["gold", "transactional", "clickhouse"],
 ) as dag:
 
-    clickhouse_ready = check_clickhouse_ready()
-
-    run_gold_job = SparkSubmitOperator(
-        task_id="run_gold_transactional_job",
-        conn_id=SPARK_CONNECTION_ID,
-        application=APPLICATION_PATH,
-        name="gold-transactional-job-{{ ds }}",
-        packages=(
-            "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.1,"
-            "org.apache.iceberg:iceberg-aws-bundle:1.6.1,"
-            "org.apache.hadoop:hadoop-aws:3.3.4,"
-            "com.amazonaws:aws-java-sdk-bundle:1.12.262"
-        ),
-        application_args=[
-            "--order-date",
-            "{{ data_interval_start.in_timezone('Asia/Tehran').strftime('%Y-%m-%d') }}",
-        ],
-        conf={
-            "spark.serializer": "org.apache.spark.serializer.JavaSerializer",
-            "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
-            "spark.sql.catalog.lakekeeper": "org.apache.iceberg.spark.SparkCatalog",
-            "spark.sql.catalog.lakekeeper.type": "rest",
-            "spark.sql.catalog.lakekeeper.uri": "http://lakekeeper:8181/catalog",
-            "spark.sql.catalog.lakekeeper.warehouse": "silver",
-            "spark.sql.catalog.lakekeeper.io-impl": "org.apache.iceberg.aws.s3.S3FileIO",
-            "spark.sql.catalog.lakekeeper.s3.endpoint": "http://minio:9000",
-            "spark.sql.catalog.lakekeeper.s3.path-style-access": "true",
-            "spark.sql.catalog.lakekeeper.s3.access-key-id": "minioadmin",
-            "spark.sql.catalog.lakekeeper.s3.secret-access-key": "minioadmin123",
-            "spark.sql.catalog.lakekeeper.s3.region": "us-east-1",
-            "spark.sql.catalog.lakekeeper.default-namespace": "transactional",
-            "spark.sql.session.timeZone": "Asia/Tehran",
-            "spark.sql.parquet.enableVectorizedReader": "false",
-            "spark.hadoop.fs.s3a.endpoint": "http://minio:9000",
-            "spark.hadoop.fs.s3a.path.style.access": "true",
-            "spark.hadoop.fs.s3a.connection.ssl.enabled": "false",
-            "spark.hadoop.fs.s3a.aws.credentials.provider": "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
-            "spark.hadoop.fs.s3a.access.key": "minioadmin",
-            "spark.hadoop.fs.s3a.secret.key": "minioadmin123",
-        },
-        env_vars={
-            "PYTHONPATH": "/opt/spark-apps",
-            "CLICKHOUSE_HOST": "clickhouse",
-            "CLICKHOUSE_HTTP_PORT": "8123",
-            "CLICKHOUSE_DB": "lakehouse",
-            "CLICKHOUSE_USER": "default",
-            "CLICKHOUSE_PASSWORD": "clickhouse123",
-        },
-        driver_memory="2g",
-        executor_memory="4g",
-        executor_cores=2,
-        verbose=True,
+    check_clickhouse = PythonOperator(
+        task_id="check_clickhouse_ready",
+        python_callable=check_clickhouse_ready,
     )
 
-    clickhouse_ready >> run_gold_job
+    run_gold_job = BashOperator(
+        task_id="run_gold_transactional_job",
+        append_env=True,
+        env={
+            "PYTHONPATH": "/opt/spark-apps",
+            "SPARK_MASTER_URL": "spark://spark-master:7077",
+            "ICEBERG_CATALOG_NAME": config.iceberg_catalog,
+            "ICEBERG_REST_URI": config.iceberg_rest_uri,
+            "ICEBERG_WAREHOUSE": config.iceberg_warehouse,
+            "ICEBERG_NAMESPACE": config.iceberg_namespace,
+            "CLICKHOUSE_HOST": config.clickhouse_host,
+            "CLICKHOUSE_HTTP_PORT": str(config.clickhouse_http_port),
+            "CLICKHOUSE_DB": config.clickhouse_db,
+            "CLICKHOUSE_USER": config.clickhouse_user,
+            "CLICKHOUSE_PASSWORD": config.clickhouse_password,
+        },
+        bash_command=(
+            "set -euo pipefail; "
+            "spark-submit "
+            "--master 'spark://spark-master:7077' "
+            "--driver-memory '2g' "
+            "--executor-memory '4g' "
+            "--executor-cores '2' "
+            f"--packages '{SPARK_PACKAGES}' "
+            f"--conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions "
+            f"--conf spark.sql.catalog.lakekeeper=org.apache.iceberg.spark.SparkCatalog "
+            f"--conf spark.sql.catalog.lakekeeper.type=rest "
+            f"--conf spark.sql.catalog.lakekeeper.uri=http://lakekeeper:8181/catalog "
+            f"--conf spark.sql.catalog.lakekeeper.warehouse=silver "
+            f"--conf spark.sql.catalog.lakekeeper.io-impl=org.apache.iceberg.aws.s3.S3FileIO "
+            f"--conf spark.sql.catalog.lakekeeper.s3.endpoint=http://minio:9000 "
+            f"--conf spark.sql.catalog.lakekeeper.s3.path-style-access=true "
+            f"--conf spark.sql.catalog.lakekeeper.s3.access-key-id=minioadmin "
+            f"--conf spark.sql.catalog.lakekeeper.s3.secret-access-key=minioadmin123 "
+            f"--conf spark.sql.catalog.lakekeeper.s3.region=us-east-1 "
+            f"--conf spark.sql.catalog.lakekeeper.default-namespace=transactional "
+            f"--conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 "
+            f"--conf spark.hadoop.fs.s3a.path.style.access=true "
+            f"--conf spark.hadoop.fs.s3a.aws.credentials.provider=org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider "
+            f"--conf spark.hadoop.fs.s3a.access.key=minioadmin "
+            f"--conf spark.hadoop.fs.s3a.secret.key=minioadmin123 "
+            f"'{GOLD_JOB_PATH}' "
+            f"--order-date '{PROCESS_DATE_TEMPLATE}'"
+        ),
+    )
+
+    check_clickhouse >> run_gold_job
