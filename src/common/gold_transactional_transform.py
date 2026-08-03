@@ -97,6 +97,7 @@ def build_transactional_obt(
             F.col("o.silver_updated_at"),
         ).alias("silver_updated_at"),
     )
+    
 
     obt = obt.select(*OBT_COLUMNS)
 
