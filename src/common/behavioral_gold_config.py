@@ -26,9 +26,6 @@ from typing import Mapping, Optional, Tuple
 from common.silver_behavioral_config import BehavioralRuntimeConfig
 
 
-# ---------------------------------------------------------------------------
-# Public constants
-# ---------------------------------------------------------------------------
 
 GOLD_BEHAVIORAL_TABLE = "behavioral_obt"
 """Default ClickHouse table name inside the target database.
@@ -39,10 +36,6 @@ here must match the table created by
 ``behavioral_gold_clickhouse.CREATE_BEHAVIORAL_GOLD_TABLE_SQL``.
 """
 
-
-# Environment variable names — centralized so we do not sprinkle string
-# literals throughout the codebase and so ``describe()`` / error messages can
-# reference the exact names an operator would ``export``.
 ENV_CLICKHOUSE_HOST = "CLICKHOUSE_HOST"
 ENV_CLICKHOUSE_HTTP_PORT = "CLICKHOUSE_HTTP_PORT"
 ENV_CLICKHOUSE_DB = "CLICKHOUSE_DB"
@@ -56,9 +49,6 @@ DEFAULT_CLICKHOUSE_DB = "lakehouse"
 DEFAULT_CLICKHOUSE_USER = "default"
 
 
-# ---------------------------------------------------------------------------
-# Env parsing helpers
-# ---------------------------------------------------------------------------
 
 
 def _get(
@@ -111,9 +101,6 @@ def _get_password(env: Mapping[str, str], name: str) -> str:
     return env.get(name, "") or ""
 
 
-# ---------------------------------------------------------------------------
-# Config dataclass
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -149,9 +136,6 @@ class GoldBehavioralConfig:
     clickhouse_password: str
     clickhouse_table: str
 
-    # ------------------------------------------------------------------
-    # Validation
-    # ------------------------------------------------------------------
 
     def __post_init__(self) -> None:
         """Reject obviously-bogus config at construction time.
@@ -174,18 +158,12 @@ class GoldBehavioralConfig:
         if not self.clickhouse_table:
             raise ValueError("clickhouse_table must be a non-empty string.")
 
-    # ------------------------------------------------------------------
-    # ClickHouse-side helpers
-    # ------------------------------------------------------------------
 
     @property
     def qualified_clickhouse_table(self) -> str:
         """Fully-qualified target table, e.g. ``lakehouse.behavioral_obt``."""
         return f"{self.clickhouse_database}.{self.clickhouse_table}"
 
-    # ------------------------------------------------------------------
-    # Silver-side helpers — resolve Iceberg table paths via BehavioralRuntimeConfig
-    # ------------------------------------------------------------------
 
     @property
     def fact_table(self) -> str:
@@ -207,9 +185,6 @@ class GoldBehavioralConfig:
         """Fully-qualified path of the Silver session dimension."""
         return self.silver.qualified_table("dim_behavioral_session")
 
-    # ------------------------------------------------------------------
-    # Column contract
-    # ------------------------------------------------------------------
 
     @property
     def target_columns(self) -> Tuple[str, ...]:
@@ -226,9 +201,6 @@ class GoldBehavioralConfig:
         """
         return GOLD_BEHAVIORAL_COLUMNS
 
-    # ------------------------------------------------------------------
-    # Debugging / logging
-    # ------------------------------------------------------------------
 
     def describe(self) -> str:
         """Return a single-line, secret-free summary suitable for logs."""
@@ -241,9 +213,6 @@ class GoldBehavioralConfig:
             ")"
         )
 
-    # ------------------------------------------------------------------
-    # Construction
-    # ------------------------------------------------------------------
 
     @classmethod
     def from_env(
@@ -301,25 +270,13 @@ class GoldBehavioralConfig:
         )
 
 
-# ---------------------------------------------------------------------------
-# Column contract
-# ---------------------------------------------------------------------------
-
-# Order matters: this tuple defines the exact projection produced by
-# ``build_behavioral_gold_obt`` and the exact column list handed to
-# ``clickhouse_connect.insert_df``. The DDL in
-# ``sql/clickhouse/001_behavioral_gold_obt.sql`` and the embedded DDL in
-# ``behavioral_gold_clickhouse.CREATE_BEHAVIORAL_GOLD_TABLE_SQL`` must list the
-# same names in the same order.
 GOLD_BEHAVIORAL_COLUMNS: Tuple[str, ...] = (
-    # ---- identity & partitioning ----
     "event_key",
     "event_id",
     "event_identity_source",
     "event_timestamp",
     "date_key",
     "processing_date",
-    # ---- user / session ----
     "user_key",
     "user_id",
     "session_key",
@@ -328,15 +285,12 @@ GOLD_BEHAVIORAL_COLUMNS: Tuple[str, ...] = (
     "session_end_at",
     "session_duration_sec",
     "session_event_count",
-    # ---- device dim overlay ----
     "device_key",
     "device_name",
     "primary_device_key",
-    # ---- event-type dim overlay ----
     "event_type_key",
     "event_type",
     "event_category",
-    # ---- attribution & context ----
     "utm_source",
     "ip_address_hash",
     "product_id",
@@ -348,7 +302,6 @@ GOLD_BEHAVIORAL_COLUMNS: Tuple[str, ...] = (
     "shipping_method",
     "fulfillment_speed",
     "error_code",
-    # ---- outcome & metrics ----
     "success",
     "http_status",
     "quantity",
@@ -359,10 +312,8 @@ GOLD_BEHAVIORAL_COLUMNS: Tuple[str, ...] = (
     "clicked_position",
     "rating",
     "text_length",
-    # ---- nested payloads flattened to JSON strings ----
     "cart_items_json",
     "dq_flags_json",
-    # ---- Kafka + Bronze lineage ----
     "kafka_topic",
     "kafka_partition",
     "kafka_offset",
@@ -370,7 +321,6 @@ GOLD_BEHAVIORAL_COLUMNS: Tuple[str, ...] = (
     "bronze_ingestion_timestamp",
     "source_file",
     "pipeline_run_id",
-    # ---- Silver & Gold audit ----
     "silver_ingestion_timestamp",
     "gold_loaded_at",
 )
