@@ -83,7 +83,7 @@ def build_transactional_obt(
         F.col("p.product_name").alias("product_name"),
         F.col("u.username").alias("username"),
         F.col("u.email").alias("email"),
-        F.col("u.signup_date").cast("date").alias("signup_date"),
+        F.coalesce(F.col("u.signup_date").cast("date"), F.lit("1970-01-01").cast("date")).alias("signup_date"),
         F.col("u.location").alias("location"),
         F.col("u.loyalty_tier").alias("loyalty_tier"),
         F.col("u.device").alias("device"),
