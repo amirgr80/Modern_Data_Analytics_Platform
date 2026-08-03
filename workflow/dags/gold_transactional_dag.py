@@ -71,7 +71,7 @@ def build_spark_command() -> str:
     return (
         "set -euo pipefail; "
         "spark-submit "
-        "--master 'local[*]' "   # 🔥 تغییر اصلی: local
+        "--master 'local[*]' "   
         "--driver-memory '2g' "
         "--executor-memory '4g' "
         "--executor-cores '2' "
